@@ -12,9 +12,55 @@ export async function verifyPassword(password: string): Promise<boolean> {
 
 export async function getCards(): Promise<Card[]> {
   const rows = await sql`
-    SELECT * FROM cards ORDER BY updated_at DESC LIMIT 200
+    SELECT * FROM cards
+    WHERE type IN ('dialog', 'record')
+    ORDER BY updated_at DESC LIMIT 200
   `
   return rows as unknown as Card[]
+}
+
+export async function getPhotos(password: string): Promise<Card[]> {
+  if (!checkPassword(password)) return []
+  const rows = await sql`
+    SELECT * FROM cards WHERE type = 'photo' ORDER BY created_at DESC
+  `
+  return rows as unknown as Card[]
+}
+
+export async function getEssays(password: string): Promise<Card[]> {
+  if (!checkPassword(password)) return []
+  const rows = await sql`
+    SELECT * FROM cards WHERE type = 'essay' ORDER BY created_at DESC
+  `
+  return rows as unknown as Card[]
+}
+
+export async function createPhoto(
+  url: string,
+  caption: string,
+  password: string
+): Promise<{ ok: true; card: Card } | { ok: false; error: string }> {
+  if (!checkPassword(password)) return { ok: false, error: 'Unauthorized.' }
+  const [card] = await sql`
+    INSERT INTO cards (type, body, meta)
+    VALUES ('photo', ${url}, ${sql.json({ caption } as any)})
+    RETURNING *
+  `
+  return { ok: true, card: card as unknown as Card }
+}
+
+export async function createEssay(
+  title: string,
+  body: string,
+  password: string
+): Promise<{ ok: true; card: Card } | { ok: false; error: string }> {
+  if (!checkPassword(password)) return { ok: false, error: 'Unauthorized.' }
+  const [card] = await sql`
+    INSERT INTO cards (type, body, meta)
+    VALUES ('essay', ${body.trim()}, ${sql.json({ title } as any)})
+    RETURNING *
+  `
+  return { ok: true, card: card as unknown as Card }
 }
 
 export async function createDialog(body: string): Promise<Card> {

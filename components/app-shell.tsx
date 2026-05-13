@@ -7,6 +7,9 @@ import { verifyPassword, recordNote } from '@/lib/actions'
 import type { Card as CardType } from '@/lib/db'
 import CardGrid from './card-grid'
 import AskModal from './modal'
+import AdminCommandInput from './admin-command-input'
+import PhotoGallery from './photo-gallery'
+import EssayViewer from './essay-viewer'
 
 export default function AppShell({ cards }: { cards: CardType[] }) {
   const router = useRouter()
@@ -25,15 +28,19 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
   const [pwError, setPwError] = useState(false)
   const pwRef = useRef<HTMLInputElement>(null)
 
-  // -- Record modal --
+  // -- Overlays --
   const [recordOpen, setRecordOpen] = useState(false)
+  const [photoOpen, setPhotoOpen] = useState(false)
+  const [essayOpen, setEssayOpen] = useState(false)
+
+  // -- Record modal --
   const [recordText, setRecordText] = useState('')
   const [recordSending, setRecordSending] = useState(false)
 
   // -- Keyboard shortcuts --
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
-      if (e.key === "'" && !askOpen && !recordOpen) {
+      if (e.key === "'" && !askOpen && !recordOpen && !photoOpen && !essayOpen) {
         e.preventDefault()
         if (admin) {
           setAdmin(false)
@@ -54,7 +61,7 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
     }
     window.addEventListener('keydown', down)
     return () => window.removeEventListener('keydown', down)
-  }, [admin, pwPrompt, askOpen, recordOpen])
+  }, [admin, pwPrompt, askOpen, recordOpen, photoOpen, essayOpen])
 
   useEffect(() => {
     if (pwPrompt) pwRef.current?.focus()
@@ -85,6 +92,24 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
       router.refresh()
     }
   }, [recordText, recordSending, adminPassword, router])
+
+  const handleCommand = useCallback((cmd: string) => {
+    switch (cmd) {
+      case 'record':
+        setRecordOpen(true)
+        break
+      case 'photo':
+        setPhotoOpen(true)
+        break
+      case 'tex':
+        setEssayOpen(true)
+        break
+      case 'exit':
+        setAdmin(false)
+        setAdminPassword('')
+        break
+    }
+  }, [])
 
   return (
     <div className="relative min-h-screen">
@@ -119,8 +144,8 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
         )}
       </AnimatePresence>
 
-      {/* Floating "Say something" button */}
-      {hasEngaged && !askOpen && (
+      {/* Floating "Say something" button (non-admin) */}
+      {!admin && hasEngaged && !askOpen && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -136,21 +161,9 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
         </motion.div>
       )}
 
-      {/* Admin: Record button */}
-      {admin && hasEngaged && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.6, duration: 0.4 }}
-          className="fixed bottom-0 left-0 pb-10 pl-10 z-40"
-        >
-          <button
-            onClick={() => setRecordOpen(true)}
-            className="font-mono text-[11px] tracking-widest uppercase text-gray-400 hover:text-[#222222] transition-colors select-none"
-          >
-            record
-          </button>
-        </motion.div>
+      {/* Admin command input */}
+      {admin && hasEngaged && !askOpen && !recordOpen && !photoOpen && !essayOpen && (
+        <AdminCommandInput onCommand={handleCommand} />
       )}
 
       {/* Mobile admin trigger — subtle dot, bottom-right */}
@@ -253,6 +266,20 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Photo gallery overlay */}
+      <PhotoGallery
+        open={photoOpen}
+        onClose={() => setPhotoOpen(false)}
+        password={adminPassword}
+      />
+
+      {/* Essay viewer overlay */}
+      <EssayViewer
+        open={essayOpen}
+        onClose={() => setEssayOpen(false)}
+        password={adminPassword}
+      />
 
       {/* Ask modal */}
       <AskModal open={askOpen} onClose={closeAsk} />

@@ -10,9 +10,10 @@ export interface Message {
 
 export interface Card {
   id: string
-  type: 'dialog' | 'record'
+  type: 'dialog' | 'record' | 'photo' | 'essay'
   messages: Message[]
   body: string
+  meta: Record<string, unknown>
   created_at: string
   updated_at: string
 }

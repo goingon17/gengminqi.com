@@ -109,6 +109,11 @@ export default function Card({
         <p className="text-lg leading-relaxed text-[#222222]">{card.body}</p>
       )}
 
+      {/* Fallback for unknown types */}
+      {card.type !== 'dialog' && card.type !== 'record' && (
+        <p className="text-lg leading-relaxed text-[#222222]">{card.body}</p>
+      )}
+
       {/* Dialog type — threaded conversation */}
       {card.type === 'dialog' && (
         <div className="space-y-4">
