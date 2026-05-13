@@ -152,6 +152,13 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
         <AdminCommandInput onCommand={handleCommand} />
       )}
 
+      {/* Mobile admin trigger — invisible touch target, bottom-right */}
+      <button
+        onClick={() => setAdmin((a) => !a)}
+        className="fixed bottom-4 right-4 z-40 w-11 h-11 opacity-0"
+        aria-label="Toggle admin"
+      />
+
       {/* Record modal with image upload */}
       <AnimatePresence>
         {recordOpen && (
