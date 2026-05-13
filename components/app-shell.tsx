@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useRouter } from 'next/navigation'
 import { recordNote } from '@/lib/actions'
@@ -8,7 +8,6 @@ import type { Card as CardType } from '@/lib/db'
 import CardGrid from './card-grid'
 import AskModal from './modal'
 import AdminCommandInput from './admin-command-input'
-import PhotoGallery from './photo-gallery'
 import EssayViewer from './essay-viewer'
 
 export default function AppShell({ cards }: { cards: CardType[] }) {
@@ -25,47 +24,69 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
 
   // -- Overlays --
   const [recordOpen, setRecordOpen] = useState(false)
-  const [photoOpen, setPhotoOpen] = useState(false)
   const [essayOpen, setEssayOpen] = useState(false)
 
   // -- Record modal --
   const [recordText, setRecordText] = useState('')
+  const [recordImages, setRecordImages] = useState<string[]>([])
   const [recordSending, setRecordSending] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
 
   // -- Keyboard shortcuts --
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    if (e.key === "'" && !askOpen && !recordOpen && !photoOpen && !essayOpen) {
+    if (e.key === "'" && !askOpen && !recordOpen && !essayOpen) {
       e.preventDefault()
       setAdmin((a) => !a)
     }
-  }, [askOpen, recordOpen, photoOpen, essayOpen])
+  }, [askOpen, recordOpen, essayOpen])
 
-  // Attach/detach listener with admin in closure via ref
   const [listening, setListening] = useState(false)
   if (typeof window !== 'undefined' && !listening) {
     window.addEventListener('keydown', handleKeyDown)
     setListening(true)
   }
 
+  const handleImageSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? [])
+    files.forEach((file) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        setRecordImages((prev) => [...prev, reader.result as string])
+      }
+      reader.readAsDataURL(file)
+    })
+    // Reset so same file can be picked again
+    e.target.value = ''
+  }, [])
+
+  const removeImage = useCallback((index: number) => {
+    setRecordImages((prev) => prev.filter((_, i) => i !== index))
+  }, [])
+
   const handleRecord = useCallback(async () => {
     if (!recordText.trim() || recordSending) return
     setRecordSending(true)
-    const result = await recordNote(recordText)
+    const meta = recordImages.length > 0 ? { images: recordImages } : undefined
+    const result = await recordNote(recordText, meta)
     setRecordSending(false)
     if (result.ok) {
       setRecordText('')
+      setRecordImages([])
       setRecordOpen(false)
       router.refresh()
     }
-  }, [recordText, recordSending, router])
+  }, [recordText, recordImages, recordSending, router])
+
+  const closeRecord = useCallback(() => {
+    setRecordOpen(false)
+    setRecordText('')
+    setRecordImages([])
+  }, [])
 
   const handleCommand = useCallback((cmd: string) => {
     switch (cmd) {
       case 'record':
         setRecordOpen(true)
-        break
-      case 'photo':
-        setPhotoOpen(true)
         break
       case 'tex':
         setEssayOpen(true)
@@ -126,12 +147,12 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
         </motion.div>
       )}
 
-      {/* Admin command input (no visual hint on page) */}
-      {admin && hasEngaged && !askOpen && !recordOpen && !photoOpen && !essayOpen && (
+      {/* Admin command input */}
+      {admin && hasEngaged && !askOpen && !recordOpen && !essayOpen && (
         <AdminCommandInput onCommand={handleCommand} />
       )}
 
-      {/* Record modal */}
+      {/* Record modal with image upload */}
       <AnimatePresence>
         {recordOpen && (
           <motion.div
@@ -139,7 +160,7 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
-            onClick={(e) => { if (e.target === e.currentTarget) setRecordOpen(false) }}
+            onClick={(e) => { if (e.target === e.currentTarget) closeRecord() }}
             className="fixed inset-0 z-50 flex items-center justify-center bg-white/70 backdrop-blur-md px-4"
           >
             <motion.div
@@ -152,6 +173,7 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
               <p className="mb-8 font-mono text-[11px] tracking-widest uppercase text-gray-300 select-none">
                 Record
               </p>
+
               <textarea
                 value={recordText}
                 onChange={(e) => setRecordText(e.target.value)}
@@ -166,34 +188,64 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
                 rows={3}
                 className="w-full resize-none bg-transparent text-lg leading-relaxed text-[#222222] placeholder:text-gray-300 outline-none"
               />
-              <div className="mt-8 flex items-center justify-between">
-                <button
-                  onClick={() => { setRecordOpen(false); setRecordText('') }}
-                  className="font-mono text-[10px] tracking-wider text-gray-300 hover:text-gray-400 transition-colors select-none"
-                >
-                  cancel
-                </button>
-                <button
-                  onClick={handleRecord}
-                  disabled={recordSending || !recordText.trim()}
-                  className={`
-                    font-mono text-[11px] tracking-widest uppercase transition-colors select-none
-                    ${recordSending || !recordText.trim() ? 'text-gray-300 cursor-default' : 'text-gray-400 hover:text-[#222222]'}
-                  `}
-                >
-                  {recordSending ? '...' : 'Save'}
-                </button>
+
+              {/* Image previews */}
+              {recordImages.length > 0 && (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {recordImages.map((img, i) => (
+                    <div key={i} className="relative group">
+                      <img
+                        src={img}
+                        alt=""
+                        className="w-16 h-16 rounded-sm object-cover border border-[#eeeeee]"
+                      />
+                      <button
+                        onClick={() => removeImage(i)}
+                        className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-white border border-[#eeeeee] font-mono text-[10px] text-gray-400 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="mt-4 flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                  <label className="font-mono text-[10px] tracking-wider text-gray-300 hover:text-gray-400 transition-colors select-none cursor-pointer">
+                    + image
+                    <input
+                      ref={fileRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handleImageSelect}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={closeRecord}
+                    className="font-mono text-[10px] tracking-wider text-gray-300 hover:text-gray-400 transition-colors select-none"
+                  >
+                    cancel
+                  </button>
+                  <button
+                    onClick={handleRecord}
+                    disabled={recordSending || !recordText.trim()}
+                    className={`
+                      font-mono text-[11px] tracking-widest uppercase transition-colors select-none
+                      ${recordSending || !recordText.trim() ? 'text-gray-300 cursor-default' : 'text-gray-400 hover:text-[#222222]'}
+                    `}
+                  >
+                    {recordSending ? '...' : 'Save'}
+                  </button>
+                </div>
               </div>
             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
-
-      {/* Photo gallery overlay */}
-      <PhotoGallery
-        open={photoOpen}
-        onClose={() => setPhotoOpen(false)}
-      />
 
       {/* Essay viewer overlay */}
       <EssayViewer

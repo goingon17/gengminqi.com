@@ -3,6 +3,8 @@
 import { useCallback, useState } from 'react'
 import { motion } from 'framer-motion'
 import { useRouter } from 'next/navigation'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { addMessage } from '@/lib/actions'
 import type { Card as CardType, Message } from '@/lib/db'
 
@@ -71,6 +73,8 @@ export default function Card({
   }, [replyText, sending, card.id, admin, router])
 
   const count = card.type === 'dialog' ? card.messages.length : 0
+  const meta = card.meta as Record<string, unknown>
+  const images = (meta.images as string[]) ?? []
 
   return (
     <motion.div
@@ -100,16 +104,46 @@ export default function Card({
             {count} msgs
           </span>
         )}
+        {card.type === 'essay' && (meta.title as string) && (
+          <span className="font-mono text-[10px] text-gray-300 select-none">
+            essay
+          </span>
+        )}
       </div>
 
-      {/* Record type */}
+      {/* Record type — text + images */}
       {card.type === 'record' && (
-        <p className="text-lg leading-relaxed text-[#222222]">{card.body}</p>
+        <>
+          {card.body && <p className="text-lg leading-relaxed text-[#222222]">{card.body}</p>}
+          {images.length > 0 && (
+            <div className="mt-3 space-y-3">
+              {images.map((img, i) => (
+                <img
+                  key={i}
+                  src={img}
+                  alt=""
+                  className="w-full rounded-sm border border-[#eeeeee]"
+                />
+              ))}
+            </div>
+          )}
+        </>
       )}
 
-      {/* Fallback for unknown types */}
-      {card.type !== 'dialog' && card.type !== 'record' && (
-        <p className="text-lg leading-relaxed text-[#222222]">{card.body}</p>
+      {/* Essay type — rendered markdown */}
+      {card.type === 'essay' && (
+        <>
+          {(meta.title as string) && (
+            <p className="text-lg leading-relaxed text-[#222222] mb-3">
+              {meta.title as string}
+            </p>
+          )}
+          <div className="prose prose-sm prose-gray max-w-none prose-headings:font-normal prose-p:text-[#222222] prose-a:text-gray-500 prose-blockquote:border-[#eeeeee] prose-blockquote:text-gray-500 prose-code:text-[#222222] prose-code:bg-gray-50 prose-code:px-1 prose-code:rounded-sm">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {card.body}
+            </ReactMarkdown>
+          </div>
+        </>
       )}
 
       {/* Dialog type — threaded conversation */}
@@ -119,7 +153,6 @@ export default function Card({
             <MessageBubble key={i} msg={msg} />
           ))}
 
-          {/* Reply trigger */}
           {!replyOpen && (
             <button
               onClick={() => setReplyOpen(true)}
@@ -129,7 +162,6 @@ export default function Card({
             </button>
           )}
 
-          {/* Inline reply */}
           {replyOpen && (
             <div className="space-y-2">
               <textarea
