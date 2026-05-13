@@ -2,7 +2,9 @@
 
 import { useCallback, useState } from 'react'
 import { motion } from 'framer-motion'
-import type { Card as CardType } from '@/lib/db'
+import { useRouter } from 'next/navigation'
+import { addMessage } from '@/lib/actions'
+import type { Card as CardType, Message } from '@/lib/db'
 
 function hash(id: string, offset: number): number {
   let h = offset
@@ -17,34 +19,60 @@ function fmtDate(iso: string) {
   return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`
 }
 
+function fmtTime(iso: string) {
+  const d = new Date(iso)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+function MessageBubble({ msg }: { msg: Message }) {
+  const isMe = msg.author === 'me'
+  return (
+    <div className={isMe ? 'ml-4 pl-4 border-l border-[#eeeeee]' : ''}>
+      {isMe && (
+        <span className="block font-mono text-[10px] tracking-widest text-gray-300 mb-1 select-none">
+          me
+        </span>
+      )}
+      <p className="text-base leading-relaxed text-[#222222]">{msg.body}</p>
+      <time className="block mt-1 font-mono text-[10px] text-gray-300 select-none">
+        {fmtTime(msg.created_at)}
+      </time>
+    </div>
+  )
+}
+
 export default function Card({
   card,
   index,
   admin,
-  onReply,
+  adminPassword,
 }: {
   card: CardType
   index: number
   admin?: boolean
-  onReply?: (id: string, answer: string) => Promise<boolean>
+  adminPassword?: string
 }) {
-  const [replying, setReplying] = useState(false)
+  const router = useRouter()
+  const [replyOpen, setReplyOpen] = useState(false)
   const [replyText, setReplyText] = useState('')
   const [sending, setSending] = useState(false)
 
   const rotate = (hash(card.id, 7) - 0.5) * 2
   const mt = hash(card.id, 13) * 16
 
-  const handleSendReply = useCallback(async () => {
-    if (!replyText.trim() || !onReply || sending) return
+  const handleReply = useCallback(async () => {
+    if (!replyText.trim() || sending) return
     setSending(true)
-    const ok = await onReply(card.id, replyText)
+    const result = await addMessage(card.id, replyText, adminPassword)
     setSending(false)
-    if (ok) {
+    if (result.ok) {
       setReplyText('')
-      setReplying(false)
+      setReplyOpen(false)
+      router.refresh()
     }
-  }, [replyText, onReply, sending, card.id])
+  }, [replyText, sending, card.id, adminPassword, router])
+
+  const count = card.type === 'dialog' ? card.messages.length : 0
 
   return (
     <motion.div
@@ -64,58 +92,61 @@ export default function Card({
       style={{ marginTop: `${mt}px` }}
       className="break-inside-avoid mb-6 rounded-sm border border-[#eeeeee] bg-white px-6 py-5"
     >
-      <time className="mb-4 block font-mono text-[11px] tracking-widest text-gray-400 select-none">
-        {fmtDate(card.created_at)}
-      </time>
+      {/* Header */}
+      <div className="mb-4 flex items-center gap-3">
+        <time className="font-mono text-[11px] tracking-widest text-gray-400 select-none">
+          {fmtDate(card.created_at)}
+        </time>
+        {count > 0 && (
+          <span className="font-mono text-[10px] text-gray-300 select-none">
+            {count} msgs
+          </span>
+        )}
+      </div>
 
-      {/* Note — my own recordings */}
-      {card.type === 'note' && (
+      {/* Record type */}
+      {card.type === 'record' && (
         <p className="text-lg leading-relaxed text-[#222222]">{card.body}</p>
       )}
 
-      {/* QA — conversation */}
-      {card.type === 'qa' && (
-        <>
-          <p className="text-lg leading-relaxed text-[#222222]">{card.question}</p>
+      {/* Dialog type — threaded conversation */}
+      {card.type === 'dialog' && (
+        <div className="space-y-4">
+          {card.messages.map((msg, i) => (
+            <MessageBubble key={i} msg={msg} />
+          ))}
 
-          {card.is_answered && card.answer && (
-            <div className="mt-4 space-y-2">
-              <div className="border-t border-[#eeeeee]" />
-              <p className="text-base leading-relaxed text-gray-500">{card.answer}</p>
-            </div>
-          )}
-
-          {/* Admin: reply to unanswered */}
-          {admin && !card.is_answered && !replying && (
+          {/* Reply trigger */}
+          {!replyOpen && (
             <button
-              onClick={() => setReplying(true)}
-              className="mt-3 font-mono text-[11px] tracking-wider text-gray-300 hover:text-gray-500 transition-colors select-none"
+              onClick={() => setReplyOpen(true)}
+              className="font-mono text-[11px] tracking-wider text-gray-300 hover:text-gray-500 transition-colors select-none"
             >
-              reply →
+              + reply
             </button>
           )}
 
-          {/* Admin: inline reply textarea */}
-          {admin && replying && (
-            <div className="mt-3 space-y-2">
+          {/* Inline reply */}
+          {replyOpen && (
+            <div className="space-y-2">
               <textarea
                 value={replyText}
                 onChange={(e) => setReplyText(e.target.value)}
-                placeholder="Type your reply..."
+                placeholder={admin ? 'Reply as me...' : 'Add to this conversation...'}
                 autoFocus
                 rows={2}
                 className="w-full resize-none bg-gray-50 px-3 py-2 text-sm leading-relaxed text-[#222222] placeholder:text-gray-300 outline-none rounded-sm"
               />
               <div className="flex items-center gap-3">
                 <button
-                  onClick={handleSendReply}
+                  onClick={handleReply}
                   disabled={sending || !replyText.trim()}
                   className="font-mono text-[11px] tracking-widest text-gray-400 hover:text-[#222222] transition-colors select-none disabled:text-gray-300 disabled:cursor-default"
                 >
                   {sending ? '...' : 'Send'}
                 </button>
                 <button
-                  onClick={() => { setReplying(false); setReplyText('') }}
+                  onClick={() => { setReplyOpen(false); setReplyText('') }}
                   className="font-mono text-[11px] tracking-wider text-gray-300 hover:text-gray-400 transition-colors select-none"
                 >
                   cancel
@@ -123,11 +154,7 @@ export default function Card({
               </div>
             </div>
           )}
-
-          <span className="mt-3 block font-mono text-[11px] tracking-widest text-gray-300 select-none">
-            — Q
-          </span>
-        </>
+        </div>
       )}
     </motion.div>
   )

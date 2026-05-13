@@ -3,7 +3,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useRouter } from 'next/navigation'
-import { askQuestion } from '@/lib/actions'
+import { createDialog } from '@/lib/actions'
 
 interface Props {
   open: boolean
@@ -19,7 +19,7 @@ export default function AskModal({ open, onClose }: Props) {
   const handleSubmit = useCallback(async () => {
     if (!body.trim() || sending) return
     setSending(true)
-    await askQuestion(body)
+    await createDialog(body)
     setBody('')
     setSending(false)
     onClose()
@@ -44,9 +44,7 @@ export default function AskModal({ open, onClose }: Props) {
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.2 }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) onClose()
-          }}
+          onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-white/70 backdrop-blur-md px-4"
         >
           <motion.div
@@ -57,7 +55,7 @@ export default function AskModal({ open, onClose }: Props) {
             className="w-full max-w-lg rounded-sm border border-[#eeeeee] bg-white px-8 py-8"
           >
             <p className="mb-8 font-mono text-[11px] tracking-widest uppercase text-gray-300 select-none">
-              Ask
+              Start a conversation
             </p>
 
             <textarea
@@ -65,7 +63,7 @@ export default function AskModal({ open, onClose }: Props) {
               value={body}
               onChange={(e) => setBody(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Ask me anything..."
+              placeholder="Say anything..."
               autoFocus
               rows={3}
               className="

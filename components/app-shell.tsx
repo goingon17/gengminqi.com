@@ -1,9 +1,9 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useRouter } from 'next/navigation'
-import { verifyPassword, replyToQuestion, recordNote } from '@/lib/actions'
+import { verifyPassword, recordNote } from '@/lib/actions'
 import type { Card as CardType } from '@/lib/db'
 import CardGrid from './card-grid'
 import AskModal from './modal'
@@ -19,6 +19,7 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
 
   // -- Admin mode --
   const [admin, setAdmin] = useState(false)
+  const [adminPassword, setAdminPassword] = useState('')
   const [pwPrompt, setPwPrompt] = useState(false)
   const [pwValue, setPwValue] = useState('')
   const [pwError, setPwError] = useState(false)
@@ -32,11 +33,11 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
   // -- Keyboard shortcuts --
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
-      // `'` key — toggle admin password prompt
       if (e.key === "'" && !askOpen && !recordOpen) {
         e.preventDefault()
         if (admin) {
           setAdmin(false)
+          setAdminPassword('')
         } else if (pwPrompt) {
           setPwPrompt(false)
           setPwValue('')
@@ -45,28 +46,25 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
           setPwPrompt(true)
         }
       }
-      // Escape — close any prompt / exit admin
       if (e.key === 'Escape') {
         setPwPrompt(false)
         setPwValue('')
         setPwError(false)
-        if (!admin) setRecordOpen(false)
       }
     }
     window.addEventListener('keydown', down)
     return () => window.removeEventListener('keydown', down)
   }, [admin, pwPrompt, askOpen, recordOpen])
 
-  // Focus password input when it appears
   useEffect(() => {
     if (pwPrompt) pwRef.current?.focus()
   }, [pwPrompt])
 
-  // Auto-blur password on verification
   const handlePwSubmit = useCallback(async () => {
     const ok = await verifyPassword(pwValue)
     if (ok) {
       setAdmin(true)
+      setAdminPassword(pwValue)
       setPwPrompt(false)
       setPwValue('')
       setPwError(false)
@@ -76,39 +74,17 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
     }
   }, [pwValue])
 
-  // -- Admin: reply --
-  const handleReply = useCallback(
-    async (id: string, answer: string): Promise<boolean> => {
-      if (!pwValue && !admin) return false
-      const password = pwValue // captured from the prompt
-      const result = await replyToQuestion(id, answer, password)
-      if (result.ok) router.refresh()
-      return result.ok
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [admin, router]
-  )
-  // Note: pwValue intentionally omitted — it's captured at password prompt time.
-  // admin state is sufficient to gate visibility.
-
-  // -- Admin: record --
   const handleRecord = useCallback(async () => {
     if (!recordText.trim() || recordSending) return
     setRecordSending(true)
-    const result = await recordNote(recordText, pwValue)
+    const result = await recordNote(recordText, adminPassword)
     setRecordSending(false)
     if (result.ok) {
       setRecordText('')
       setRecordOpen(false)
       router.refresh()
     }
-  }, [recordText, recordSending, pwValue, router])
-
-  // -- Filter which cards to show --
-  const visibleCards = useMemo(
-    () => (admin ? cards : cards.filter((c) => c.type === 'note' || c.is_answered)),
-    [cards, admin]
-  )
+  }, [recordText, recordSending, adminPassword, router])
 
   return (
     <div className="relative min-h-screen">
@@ -119,7 +95,7 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
           animate={{ opacity: 1 }}
           transition={{ duration: 0.6, ease: 'easeOut' }}
         >
-          <CardGrid cards={visibleCards} admin={admin} onReply={handleReply} />
+          <CardGrid cards={cards} admin={admin} adminPassword={adminPassword} />
         </motion.div>
       )}
 
@@ -143,7 +119,7 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
         )}
       </AnimatePresence>
 
-      {/* Floating button */}
+      {/* Floating "Say something" button */}
       {hasEngaged && !askOpen && (
         <motion.div
           initial={{ opacity: 0 }}
@@ -177,7 +153,18 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
         </motion.div>
       )}
 
-      {/* Admin: password prompt */}
+      {/* Mobile admin trigger — subtle dot, bottom-right */}
+      {!admin && (
+        <button
+          onClick={() => setPwPrompt(true)}
+          className="fixed bottom-6 right-6 z-40 w-6 h-6 flex items-center justify-center text-gray-300 hover:text-gray-400 transition-colors text-lg leading-none select-none"
+          aria-label="Admin"
+        >
+          ·
+        </button>
+      )}
+
+      {/* Password prompt */}
       <AnimatePresence>
         {pwPrompt && (
           <motion.div

@@ -1,11 +1,9 @@
 'use server'
 
-import { sql, type Card } from './db'
+import { sql, type Card, type Message } from './db'
 
 function checkPassword(input?: string): boolean {
-  const expected = process.env.APP_PASSWORD
-  if (!expected) return false
-  return input === expected
+  return input === process.env.APP_PASSWORD
 }
 
 export async function verifyPassword(password: string): Promise<boolean> {
@@ -14,33 +12,43 @@ export async function verifyPassword(password: string): Promise<boolean> {
 
 export async function getCards(): Promise<Card[]> {
   const rows = await sql`
-    SELECT * FROM cards ORDER BY created_at DESC LIMIT 200
+    SELECT * FROM cards ORDER BY updated_at DESC LIMIT 200
   `
   return rows as unknown as Card[]
 }
 
-export async function askQuestion(body: string): Promise<Card> {
+export async function createDialog(body: string): Promise<Card> {
+  const msg: Message = {
+    author: 'visitor',
+    body: body.trim(),
+    created_at: new Date().toISOString(),
+  }
+
   const [card] = await sql`
-    INSERT INTO cards (type, question)
-    VALUES ('qa', ${body.trim()})
+    INSERT INTO cards (type, messages)
+    VALUES ('dialog', ${sql.json([msg] as any)})
     RETURNING *
   `
   return card as unknown as Card
 }
 
-export async function replyToQuestion(
-  id: string,
-  answer: string,
+export async function addMessage(
+  cardId: string,
+  body: string,
   password?: string
 ): Promise<{ ok: true; card: Card } | { ok: false; error: string }> {
-  if (!checkPassword(password)) {
-    return { ok: false, error: 'Unauthorized.' }
+  const author: Message['author'] = checkPassword(password) ? 'me' : 'visitor'
+  const msg: Message = {
+    author,
+    body: body.trim(),
+    created_at: new Date().toISOString(),
   }
 
   const [card] = await sql`
     UPDATE cards
-    SET answer = ${answer.trim()}, is_answered = true, answered_at = now()
-    WHERE id = ${id} AND type = 'qa'
+    SET messages = messages || ${sql.json([msg] as any)}::jsonb,
+        updated_at = now()
+    WHERE id = ${cardId}
     RETURNING *
   `
 
@@ -52,13 +60,11 @@ export async function recordNote(
   body: string,
   password?: string
 ): Promise<{ ok: true; card: Card } | { ok: false; error: string }> {
-  if (!checkPassword(password)) {
-    return { ok: false, error: 'Unauthorized.' }
-  }
+  if (!checkPassword(password)) return { ok: false, error: 'Unauthorized.' }
 
   const [card] = await sql`
     INSERT INTO cards (type, body)
-    VALUES ('note', ${body.trim()})
+    VALUES ('record', ${body.trim()})
     RETURNING *
   `
   return { ok: true, card: card as unknown as Card }
