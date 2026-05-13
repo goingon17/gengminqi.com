@@ -3,17 +3,14 @@
 import { useCallback, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useRouter } from 'next/navigation'
-import { createCard } from '@/lib/actions'
-import type { CardType } from '@/lib/db'
+import { askQuestion } from '@/lib/actions'
 
 interface Props {
   open: boolean
   onClose: () => void
-  onSubmitted?: () => void
 }
 
-export default function Modal({ open, onClose, onSubmitted }: Props) {
-  const [mode, setMode] = useState<CardType>('post')
+export default function AskModal({ open, onClose }: Props) {
   const [body, setBody] = useState('')
   const [sending, setSending] = useState(false)
   const router = useRouter()
@@ -22,15 +19,12 @@ export default function Modal({ open, onClose, onSubmitted }: Props) {
   const handleSubmit = useCallback(async () => {
     if (!body.trim() || sending) return
     setSending(true)
-
-    await createCard({ type: mode, body })
-
+    await askQuestion(body)
     setBody('')
     setSending(false)
     onClose()
-    onSubmitted?.()
     router.refresh()
-  }, [body, mode, sending, onClose, onSubmitted, router])
+  }, [body, sending, onClose, router])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -50,7 +44,9 @@ export default function Modal({ open, onClose, onSubmitted }: Props) {
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.2 }}
-          onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) onClose()
+          }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-white/70 backdrop-blur-md px-4"
         >
           <motion.div
@@ -60,41 +56,16 @@ export default function Modal({ open, onClose, onSubmitted }: Props) {
             transition={{ type: 'spring', stiffness: 350, damping: 32 }}
             className="w-full max-w-lg rounded-sm border border-[#eeeeee] bg-white px-8 py-8"
           >
-            {/* Toggle */}
-            <div className="mb-8 flex items-center gap-6 font-mono text-[11px] tracking-widest uppercase select-none">
-              <button
-                onClick={() => setMode('post')}
-                className={`transition-colors ${
-                  mode === 'post'
-                    ? 'text-[#222222]'
-                    : 'text-gray-300 hover:text-gray-400'
-                }`}
-              >
-                Record
-              </button>
-              <button
-                onClick={() => setMode('question')}
-                className={`transition-colors ${
-                  mode === 'question'
-                    ? 'text-[#222222]'
-                    : 'text-gray-300 hover:text-gray-400'
-                }`}
-              >
-                Ask
-              </button>
-            </div>
+            <p className="mb-8 font-mono text-[11px] tracking-widest uppercase text-gray-300 select-none">
+              Ask
+            </p>
 
-            {/* Textarea */}
             <textarea
               ref={textareaRef}
               value={body}
               onChange={(e) => setBody(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={
-                mode === 'post'
-                  ? "What's on your mind?"
-                  : 'Ask me anything...'
-              }
+              placeholder="Ask me anything..."
               autoFocus
               rows={3}
               className="
@@ -105,7 +76,6 @@ export default function Modal({ open, onClose, onSubmitted }: Props) {
               "
             />
 
-            {/* Submit */}
             <div className="mt-8 flex items-center justify-between">
               <span className="font-mono text-[10px] tracking-wider text-gray-300 select-none">
                 &#8984;+&#8629;
@@ -114,12 +84,8 @@ export default function Modal({ open, onClose, onSubmitted }: Props) {
                 onClick={handleSubmit}
                 disabled={sending || !body.trim()}
                 className={`
-                  font-mono text-[11px] tracking-widest uppercase
-                  transition-colors select-none
-                  ${sending || !body.trim()
-                    ? 'text-gray-300 cursor-default'
-                    : 'text-gray-400 hover:text-[#222222]'
-                  }
+                  font-mono text-[11px] tracking-widest uppercase transition-colors select-none
+                  ${sending || !body.trim() ? 'text-gray-300 cursor-default' : 'text-gray-400 hover:text-[#222222]'}
                 `}
               >
                 {sending ? '...' : 'Send'}

@@ -2,12 +2,13 @@ import postgres from 'postgres'
 
 export const sql = postgres(process.env.POSTGRES_URL!, { ssl: 'require' })
 
-export type CardType = 'post' | 'question'
-
 export interface Card {
   id: string
-  type: CardType
+  type: 'qa' | 'note'
+  question: string
+  answer: string
   body: string
-  is_public: boolean
+  is_answered: boolean
   created_at: string
+  answered_at: string | null
 }

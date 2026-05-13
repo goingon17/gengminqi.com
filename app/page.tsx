@@ -1,10 +1,10 @@
-import { getPublicCards } from '@/lib/actions'
+import { getCards } from '@/lib/actions'
 import AppShell from '@/components/app-shell'
 
 export const dynamic = 'force-dynamic'
 
 export default async function Home() {
-  const cards = await getPublicCards()
+  const cards = await getCards()
 
   return (
     <main className="mx-auto w-full max-w-6xl">
