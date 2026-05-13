@@ -45,12 +45,10 @@ export default function Card({
   card,
   index,
   admin,
-  adminPassword,
 }: {
   card: CardType
   index: number
   admin?: boolean
-  adminPassword?: string
 }) {
   const router = useRouter()
   const [replyOpen, setReplyOpen] = useState(false)
@@ -63,14 +61,14 @@ export default function Card({
   const handleReply = useCallback(async () => {
     if (!replyText.trim() || sending) return
     setSending(true)
-    const result = await addMessage(card.id, replyText, adminPassword)
+    const result = await addMessage(card.id, replyText, admin)
     setSending(false)
     if (result.ok) {
       setReplyText('')
       setReplyOpen(false)
       router.refresh()
     }
-  }, [replyText, sending, card.id, adminPassword, router])
+  }, [replyText, sending, card.id, admin, router])
 
   const count = card.type === 'dialog' ? card.messages.length : 0
 

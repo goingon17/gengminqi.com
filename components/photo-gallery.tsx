@@ -8,10 +8,9 @@ import type { Card } from '@/lib/db'
 interface Props {
   open: boolean
   onClose: () => void
-  password: string
 }
 
-export default function PhotoGallery({ open, onClose, password }: Props) {
+export default function PhotoGallery({ open, onClose }: Props) {
   const [photos, setPhotos] = useState<Card[]>([])
   const [loading, setLoading] = useState(false)
   const [showUpload, setShowUpload] = useState(false)
@@ -21,10 +20,10 @@ export default function PhotoGallery({ open, onClose, password }: Props) {
 
   const fetch = useCallback(async () => {
     setLoading(true)
-    const data = await getPhotos(password)
+    const data = await getPhotos()
     setPhotos(data)
     setLoading(false)
-  }, [password])
+  }, [])
 
   useEffect(() => {
     if (open) fetch()
@@ -33,7 +32,7 @@ export default function PhotoGallery({ open, onClose, password }: Props) {
   const handleUpload = useCallback(async () => {
     if (!url.trim() || sending) return
     setSending(true)
-    const result = await createPhoto(url.trim(), caption.trim(), password)
+    const result = await createPhoto(url.trim(), caption.trim())
     setSending(false)
     if (result.ok) {
       setUrl('')
@@ -41,7 +40,7 @@ export default function PhotoGallery({ open, onClose, password }: Props) {
       setShowUpload(false)
       fetch()
     }
-  }, [url, caption, sending, password, fetch])
+  }, [url, caption, sending, fetch])
 
   return (
     <AnimatePresence>
@@ -61,7 +60,6 @@ export default function PhotoGallery({ open, onClose, password }: Props) {
             transition={{ type: 'spring', stiffness: 350, damping: 32 }}
             className="w-full max-w-3xl rounded-sm border border-[#eeeeee] bg-white px-8 py-8"
           >
-            {/* Header */}
             <div className="mb-8 flex items-center justify-between">
               <p className="font-mono text-[11px] tracking-widest uppercase text-gray-300 select-none">
                 Photos
@@ -74,7 +72,6 @@ export default function PhotoGallery({ open, onClose, password }: Props) {
               </button>
             </div>
 
-            {/* Upload form */}
             {showUpload && (
               <div className="mb-8 space-y-3 p-4 bg-gray-50 rounded-sm">
                 <input
@@ -102,7 +99,6 @@ export default function PhotoGallery({ open, onClose, password }: Props) {
               </div>
             )}
 
-            {/* Grid */}
             {loading ? (
               <div className="flex justify-center py-12">
                 <span className="font-mono text-[11px] text-gray-300">Loading...</span>

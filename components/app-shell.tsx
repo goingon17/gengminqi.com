@@ -1,9 +1,9 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useRouter } from 'next/navigation'
-import { verifyPassword, recordNote } from '@/lib/actions'
+import { recordNote } from '@/lib/actions'
 import type { Card as CardType } from '@/lib/db'
 import CardGrid from './card-grid'
 import AskModal from './modal'
@@ -20,13 +20,8 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
   const openAsk = useCallback(() => { setHasEngaged(true); setAskOpen(true) }, [])
   const closeAsk = useCallback(() => setAskOpen(false), [])
 
-  // -- Admin mode --
+  // -- Admin mode (hidden, toggled by `'` key) --
   const [admin, setAdmin] = useState(false)
-  const [adminPassword, setAdminPassword] = useState('')
-  const [pwPrompt, setPwPrompt] = useState(false)
-  const [pwValue, setPwValue] = useState('')
-  const [pwError, setPwError] = useState(false)
-  const pwRef = useRef<HTMLInputElement>(null)
 
   // -- Overlays --
   const [recordOpen, setRecordOpen] = useState(false)
@@ -38,60 +33,31 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
   const [recordSending, setRecordSending] = useState(false)
 
   // -- Keyboard shortcuts --
-  useEffect(() => {
-    const down = (e: KeyboardEvent) => {
-      if (e.key === "'" && !askOpen && !recordOpen && !photoOpen && !essayOpen) {
-        e.preventDefault()
-        if (admin) {
-          setAdmin(false)
-          setAdminPassword('')
-        } else if (pwPrompt) {
-          setPwPrompt(false)
-          setPwValue('')
-          setPwError(false)
-        } else {
-          setPwPrompt(true)
-        }
-      }
-      if (e.key === 'Escape') {
-        setPwPrompt(false)
-        setPwValue('')
-        setPwError(false)
-      }
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if (e.key === "'" && !askOpen && !recordOpen && !photoOpen && !essayOpen) {
+      e.preventDefault()
+      setAdmin((a) => !a)
     }
-    window.addEventListener('keydown', down)
-    return () => window.removeEventListener('keydown', down)
-  }, [admin, pwPrompt, askOpen, recordOpen, photoOpen, essayOpen])
+  }, [askOpen, recordOpen, photoOpen, essayOpen])
 
-  useEffect(() => {
-    if (pwPrompt) pwRef.current?.focus()
-  }, [pwPrompt])
-
-  const handlePwSubmit = useCallback(async () => {
-    const ok = await verifyPassword(pwValue)
-    if (ok) {
-      setAdmin(true)
-      setAdminPassword(pwValue)
-      setPwPrompt(false)
-      setPwValue('')
-      setPwError(false)
-    } else {
-      setPwError(true)
-      setPwValue('')
-    }
-  }, [pwValue])
+  // Attach/detach listener with admin in closure via ref
+  const [listening, setListening] = useState(false)
+  if (typeof window !== 'undefined' && !listening) {
+    window.addEventListener('keydown', handleKeyDown)
+    setListening(true)
+  }
 
   const handleRecord = useCallback(async () => {
     if (!recordText.trim() || recordSending) return
     setRecordSending(true)
-    const result = await recordNote(recordText, adminPassword)
+    const result = await recordNote(recordText)
     setRecordSending(false)
     if (result.ok) {
       setRecordText('')
       setRecordOpen(false)
       router.refresh()
     }
-  }, [recordText, recordSending, adminPassword, router])
+  }, [recordText, recordSending, router])
 
   const handleCommand = useCallback((cmd: string) => {
     switch (cmd) {
@@ -106,7 +72,6 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
         break
       case 'exit':
         setAdmin(false)
-        setAdminPassword('')
         break
     }
   }, [])
@@ -120,7 +85,7 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
           animate={{ opacity: 1 }}
           transition={{ duration: 0.6, ease: 'easeOut' }}
         >
-          <CardGrid cards={cards} admin={admin} adminPassword={adminPassword} />
+          <CardGrid cards={cards} admin={admin} />
         </motion.div>
       )}
 
@@ -161,53 +126,10 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
         </motion.div>
       )}
 
-      {/* Admin command input */}
+      {/* Admin command input (no visual hint on page) */}
       {admin && hasEngaged && !askOpen && !recordOpen && !photoOpen && !essayOpen && (
         <AdminCommandInput onCommand={handleCommand} />
       )}
-
-      {/* Mobile admin trigger — subtle dot, bottom-right */}
-      {!admin && (
-        <button
-          onClick={() => setPwPrompt(true)}
-          className="fixed bottom-6 right-6 z-40 w-6 h-6 flex items-center justify-center text-gray-300 hover:text-gray-400 transition-colors text-lg leading-none select-none"
-          aria-label="Admin"
-        >
-          ·
-        </button>
-      )}
-
-      {/* Password prompt */}
-      <AnimatePresence>
-        {pwPrompt && (
-          <motion.div
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 4, transition: { duration: 0.12 } }}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-transparent pointer-events-none"
-          >
-            <div className="pointer-events-auto flex items-center gap-2">
-              <input
-                ref={pwRef}
-                type="password"
-                value={pwValue}
-                onChange={(e) => { setPwValue(e.target.value); setPwError(false) }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handlePwSubmit()
-                  if (e.key === 'Escape') { setPwPrompt(false); setPwValue(''); setPwError(false) }
-                }}
-                placeholder={pwError ? 'try again' : '·'}
-                className={`
-                  w-28 bg-transparent text-center font-mono text-sm outline-none
-                  placeholder:tracking-widest
-                  ${pwError ? 'text-red-400 placeholder:text-red-300' : 'text-[#222222]'}
-                `}
-                autoFocus
-              />
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* Record modal */}
       <AnimatePresence>
@@ -271,14 +193,12 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
       <PhotoGallery
         open={photoOpen}
         onClose={() => setPhotoOpen(false)}
-        password={adminPassword}
       />
 
       {/* Essay viewer overlay */}
       <EssayViewer
         open={essayOpen}
         onClose={() => setEssayOpen(false)}
-        password={adminPassword}
       />
 
       {/* Ask modal */}

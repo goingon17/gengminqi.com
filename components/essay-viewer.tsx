@@ -10,12 +10,11 @@ import type { Card } from '@/lib/db'
 interface Props {
   open: boolean
   onClose: () => void
-  password: string
 }
 
 type View = 'list' | 'reader' | 'editor'
 
-export default function EssayViewer({ open, onClose, password }: Props) {
+export default function EssayViewer({ open, onClose }: Props) {
   const [essays, setEssays] = useState<Card[]>([])
   const [loading, setLoading] = useState(false)
   const [view, setView] = useState<View>('list')
@@ -27,10 +26,10 @@ export default function EssayViewer({ open, onClose, password }: Props) {
 
   const fetch = useCallback(async () => {
     setLoading(true)
-    const data = await getEssays(password)
+    const data = await getEssays()
     setEssays(data)
     setLoading(false)
-  }, [password])
+  }, [])
 
   useEffect(() => {
     if (open) fetch()
@@ -50,7 +49,7 @@ export default function EssayViewer({ open, onClose, password }: Props) {
   const handleSave = useCallback(async () => {
     if (!title.trim() || !body.trim() || sending) return
     setSending(true)
-    const result = await createEssay(title.trim(), body.trim(), password)
+    const result = await createEssay(title.trim(), body.trim())
     setSending(false)
     if (result.ok) {
       setTitle('')
@@ -58,7 +57,7 @@ export default function EssayViewer({ open, onClose, password }: Props) {
       setView('list')
       fetch()
     }
-  }, [title, body, sending, password, fetch])
+  }, [title, body, sending, fetch])
 
   const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]

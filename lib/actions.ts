@@ -2,14 +2,6 @@
 
 import { sql, type Card, type Message } from './db'
 
-function checkPassword(input?: string): boolean {
-  return input === process.env.APP_PASSWORD
-}
-
-export async function verifyPassword(password: string): Promise<boolean> {
-  return checkPassword(password)
-}
-
 export async function getCards(): Promise<Card[]> {
   const rows = await sql`
     SELECT * FROM cards
@@ -19,16 +11,14 @@ export async function getCards(): Promise<Card[]> {
   return rows as unknown as Card[]
 }
 
-export async function getPhotos(password: string): Promise<Card[]> {
-  if (!checkPassword(password)) return []
+export async function getPhotos(): Promise<Card[]> {
   const rows = await sql`
     SELECT * FROM cards WHERE type = 'photo' ORDER BY created_at DESC
   `
   return rows as unknown as Card[]
 }
 
-export async function getEssays(password: string): Promise<Card[]> {
-  if (!checkPassword(password)) return []
+export async function getEssays(): Promise<Card[]> {
   const rows = await sql`
     SELECT * FROM cards WHERE type = 'essay' ORDER BY created_at DESC
   `
@@ -37,10 +27,8 @@ export async function getEssays(password: string): Promise<Card[]> {
 
 export async function createPhoto(
   url: string,
-  caption: string,
-  password: string
+  caption: string
 ): Promise<{ ok: true; card: Card } | { ok: false; error: string }> {
-  if (!checkPassword(password)) return { ok: false, error: 'Unauthorized.' }
   const [card] = await sql`
     INSERT INTO cards (type, body, meta)
     VALUES ('photo', ${url}, ${sql.json({ caption } as any)})
@@ -51,10 +39,8 @@ export async function createPhoto(
 
 export async function createEssay(
   title: string,
-  body: string,
-  password: string
+  body: string
 ): Promise<{ ok: true; card: Card } | { ok: false; error: string }> {
-  if (!checkPassword(password)) return { ok: false, error: 'Unauthorized.' }
   const [card] = await sql`
     INSERT INTO cards (type, body, meta)
     VALUES ('essay', ${body.trim()}, ${sql.json({ title } as any)})
@@ -81,9 +67,9 @@ export async function createDialog(body: string): Promise<Card> {
 export async function addMessage(
   cardId: string,
   body: string,
-  password?: string
+  asAdmin?: boolean
 ): Promise<{ ok: true; card: Card } | { ok: false; error: string }> {
-  const author: Message['author'] = checkPassword(password) ? 'me' : 'visitor'
+  const author: Message['author'] = asAdmin ? 'me' : 'visitor'
   const msg: Message = {
     author,
     body: body.trim(),
@@ -103,11 +89,8 @@ export async function addMessage(
 }
 
 export async function recordNote(
-  body: string,
-  password?: string
+  body: string
 ): Promise<{ ok: true; card: Card } | { ok: false; error: string }> {
-  if (!checkPassword(password)) return { ok: false, error: 'Unauthorized.' }
-
   const [card] = await sql`
     INSERT INTO cards (type, body)
     VALUES ('record', ${body.trim()})
