@@ -46,18 +46,40 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
     setListening(true)
   }
 
-  const handleImageSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? [])
-    files.forEach((file) => {
-      const reader = new FileReader()
-      reader.onload = () => {
-        setRecordImages((prev) => [...prev, reader.result as string])
+  const compressImage = useCallback((file: File, maxDim = 1200): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image()
+      img.onload = () => {
+        let { width, height } = img
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = (height / width) * maxDim
+            width = maxDim
+          } else {
+            width = (width / height) * maxDim
+            height = maxDim
+          }
+        }
+        const canvas = document.createElement('canvas')
+        canvas.width = width
+        canvas.height = height
+        canvas.getContext('2d')!.drawImage(img, 0, 0, width, height)
+        URL.revokeObjectURL(img.src)
+        resolve(canvas.toDataURL('image/jpeg', 0.8))
       }
-      reader.readAsDataURL(file)
+      img.onerror = reject
+      img.src = URL.createObjectURL(file)
     })
-    // Reset so same file can be picked again
-    e.target.value = ''
   }, [])
+
+  const handleImageSelect = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? [])
+    for (const file of files) {
+      const dataUrl = await compressImage(file)
+      setRecordImages((prev) => [...prev, dataUrl])
+    }
+    e.target.value = ''
+  }, [compressImage])
 
   const removeImage = useCallback((index: number) => {
     setRecordImages((prev) => prev.filter((_, i) => i !== index))
@@ -81,6 +103,7 @@ export default function AppShell({ cards }: { cards: CardType[] }) {
     setRecordOpen(false)
     setRecordText('')
     setRecordImages([])
+    setRecordSending(false)
   }, [])
 
   const handleCommand = useCallback((cmd: string) => {
