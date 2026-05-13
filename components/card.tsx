@@ -8,14 +8,6 @@ import remarkGfm from 'remark-gfm'
 import { addMessage } from '@/lib/actions'
 import type { Card as CardType, Message } from '@/lib/db'
 
-function hash(id: string, offset: number): number {
-  let h = offset
-  for (let i = 0; i < id.length; i++) {
-    h = ((h << 5) - h + id.charCodeAt(i)) | 0
-  }
-  return (h & 0xffff) / 0xffff
-}
-
 function fmtDate(iso: string) {
   const d = new Date(iso)
   return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`
@@ -57,9 +49,6 @@ export default function Card({
   const [replyText, setReplyText] = useState('')
   const [sending, setSending] = useState(false)
 
-  const rotate = (hash(card.id, 7) - 0.5) * 2
-  const mt = hash(card.id, 13) * 16
-
   const handleReply = useCallback(async () => {
     if (!replyText.trim() || sending) return
     setSending(true)
@@ -79,7 +68,7 @@ export default function Card({
   return (
     <motion.div
       initial={{ opacity: 0, y: 24 }}
-      animate={{ opacity: 1, y: 0, rotate }}
+      animate={{ opacity: 1, y: 0 }}
       transition={{
         type: 'spring',
         stiffness: 100,
@@ -91,7 +80,6 @@ export default function Card({
         boxShadow: '0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.02)',
         transition: { duration: 0.2, ease: 'easeOut' },
       }}
-      style={{ marginTop: `${mt}px` }}
       className="break-inside-avoid mb-6 rounded-sm border border-[#eeeeee] bg-white px-6 py-5"
     >
       {/* Header */}

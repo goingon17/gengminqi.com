@@ -59,15 +59,15 @@ export default function EssayViewer({ open, onClose }: Props) {
     }
   }, [title, body, sending, fetch])
 
-  const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    const reader = new FileReader()
-    reader.onload = () => {
-      setBody(reader.result as string)
-    }
-    reader.readAsText(file)
-  }, [])
+    const title = file.name.replace(/\.[^/.]+$/, '')
+    const text = await file.text()
+    await createEssay(title, text)
+    e.target.value = ''
+    fetch()
+  }, [fetch])
 
   const handleBack = useCallback(() => {
     setView('list')
@@ -104,12 +104,24 @@ export default function EssayViewer({ open, onClose }: Props) {
                   <p className="font-mono text-[11px] tracking-widest uppercase text-gray-300 select-none">
                     Essays
                   </p>
-                  <button
-                    onClick={openEditor}
-                    className="font-mono text-[11px] tracking-wider text-gray-400 hover:text-[#222222] transition-colors select-none"
-                  >
-                    + new
-                  </button>
+                  <div className="flex items-center gap-4">
+                    <label className="font-mono text-[10px] tracking-wider text-gray-300 hover:text-gray-400 transition-colors select-none cursor-pointer">
+                      Upload .md
+                      <input
+                        ref={fileRef}
+                        type="file"
+                        accept=".md,.mdx,.txt"
+                        onChange={handleFileUpload}
+                        className="hidden"
+                      />
+                    </label>
+                    <button
+                      onClick={openEditor}
+                      className="font-mono text-[11px] tracking-wider text-gray-400 hover:text-[#222222] transition-colors select-none"
+                    >
+                      + new
+                    </button>
+                  </div>
                 </div>
 
                 {loading ? (
@@ -205,16 +217,6 @@ export default function EssayViewer({ open, onClose }: Props) {
                     >
                       {sending ? '...' : 'Save'}
                     </button>
-                    <label className="font-mono text-[10px] tracking-wider text-gray-300 hover:text-gray-400 transition-colors select-none cursor-pointer">
-                      Upload .md
-                      <input
-                        ref={fileRef}
-                        type="file"
-                        accept=".md,.mdx,.txt"
-                        onChange={handleFileUpload}
-                        className="hidden"
-                      />
-                    </label>
                   </div>
                 </div>
               </>
