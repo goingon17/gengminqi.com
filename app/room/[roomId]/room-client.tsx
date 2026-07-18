@@ -2,6 +2,7 @@
 
 import {
   Activity,
+  AlertTriangle,
   Castle,
   CheckCircle2,
   Circle,
@@ -9,6 +10,7 @@ import {
   Eye,
   Flag,
   Lock,
+  PauseCircle,
   Radio,
   RefreshCcw,
   Send,
@@ -60,6 +62,7 @@ import {
   gameVoteCommitment,
   gameVoteScope,
   randomVoteSalt,
+  type GameProtocolSnapshot,
   type GameProtocolPayload,
   type MissionVoteChoice,
   type TeamVoteChoice,
@@ -169,6 +172,8 @@ type LocalVoteDraft = {
 };
 
 const HEARTBEAT_MS = 12_000;
+const CLOCK_TICK_MS = 5_000;
+const PROTOCOL_WAIT_MS = 75_000;
 
 export function RoomClient({ roomId }: { roomId: string }) {
   const normalizedRoomId = useMemo(() => normalizeRoom(roomId), [roomId]);
@@ -202,6 +207,9 @@ export function RoomClient({ roomId }: { roomId: string }) {
   const [voteDrafts, setVoteDrafts] = useState<Record<string, LocalVoteDraft>>({});
   const [assassinationTarget, setAssassinationTarget] = useState("");
   const [secretsCleared, setSecretsCleared] = useState(false);
+  const [nowMs, setNowMs] = useState(0);
+  const [lastActivityAt, setLastActivityAt] = useState(0);
+  const [terminated, setTerminated] = useState(false);
   const [genesis, setGenesis] = useState<GenesisSummary>({
     ready: false,
     hash: "",
@@ -257,6 +265,10 @@ export function RoomClient({ roomId }: { roomId: string }) {
       }
       return [event, ...current].slice(0, 24);
     });
+  }, []);
+
+  const markActivity = useCallback(() => {
+    setLastActivityAt(currentTimestamp());
   }, []);
 
   const requestReplay = useCallback(() => {
@@ -316,6 +328,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
       }
 
       seenHashesRef.current.add(hash);
+      markActivity();
       lastSequenceBySenderRef.current.set(envelope.senderId, envelope.sequence);
       lastHashBySenderRef.current.set(envelope.senderId, hash);
 
@@ -332,14 +345,14 @@ export function RoomClient({ roomId }: { roomId: string }) {
           hash,
           envelope,
           relay,
-          receivedAt: Date.now(),
+          receivedAt: currentTimestamp(),
         });
       }
 
       addEvent(publicEventFromEnvelope(envelope, relay, hash, verified));
       setError(null);
     },
-    [addEvent, normalizedRoomId, requestReplay, room?.players, signingKeysByPlayer],
+    [addEvent, markActivity, normalizedRoomId, requestReplay, room?.players, signingKeysByPlayer],
   );
 
   const handleRelayMessage = useCallback(
@@ -349,6 +362,8 @@ export function RoomClient({ roomId }: { roomId: string }) {
         setError("Received an unreadable relay event.");
         return;
       }
+
+      markActivity();
 
       if (event.type === "joined") {
         setRedisConfigured(event.redisConfigured);
@@ -364,6 +379,10 @@ export function RoomClient({ roomId }: { roomId: string }) {
       }
 
       if (event.type === "presence") {
+        return;
+      }
+
+      if (event.type === "heartbeat") {
         return;
       }
 
@@ -384,7 +403,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
         setError(event.message);
       }
     },
-    [acceptEnvelope],
+    [acceptEnvelope, markActivity],
   );
 
   const connect = useCallback(() => {
@@ -458,6 +477,57 @@ export function RoomClient({ roomId }: { roomId: string }) {
   useEffect(() => {
     connectRef.current = connect;
   }, [connect]);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) {
+        return;
+      }
+
+      const timestamp = currentTimestamp();
+      setNowMs(timestamp);
+      setLastActivityAt((current) => current || timestamp);
+    });
+
+    const interval = setInterval(() => {
+      const timestamp = currentTimestamp();
+      queueMicrotask(() => {
+        if (!cancelled) {
+          setNowMs(timestamp);
+        }
+      });
+    }, CLOCK_TICK_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    function handleVisibilityChange() {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+
+      const timestamp = currentTimestamp();
+      setNowMs(timestamp);
+      setLastActivityAt(timestamp);
+
+      if (socketRef.current?.readyState === WebSocket.OPEN) {
+        requestReplay();
+        return;
+      }
+
+      connectRef.current();
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [requestReplay]);
 
   useEffect(() => {
     const savedPlayerId = localStorage.getItem("avalon:playerId") ?? crypto.randomUUID();
@@ -815,6 +885,11 @@ export function RoomClient({ roomId }: { roomId: string }) {
   }
 
   async function sendSignedPayload(messageType: string, payload: Record<string, string | number | boolean | string[]>) {
+    if (terminated) {
+      setError("Protocol is paused locally. Resume before sending a new event.");
+      return;
+    }
+
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       setError("Socket is not connected yet.");
@@ -840,6 +915,24 @@ export function RoomClient({ roomId }: { roomId: string }) {
     });
 
     socket.send(JSON.stringify({ type: "envelope", envelope }));
+  }
+
+  function abortLocalProtocol() {
+    setTerminated(true);
+    setError("Protocol paused locally. No new signed events will be sent from this device.");
+  }
+
+  function resumeLocalProtocol() {
+    setTerminated(false);
+    setError(null);
+    setLastActivityAt(currentTimestamp());
+
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      requestReplay();
+      return;
+    }
+
+    connectRef.current();
   }
 
   function lockCurrentRoom() {
@@ -881,31 +974,77 @@ export function RoomClient({ roomId }: { roomId: string }) {
             : revealCount < rolePlayerIds.length
               ? "reveal"
               : "assigning";
-  const canCommit = socketState === "open" && genesis.ready && Boolean(roleSeed) && !localCommitted;
+  const offlinePlayers = (room?.players ?? []).filter((player) => !player.online);
+  const idleSeconds = nowMs && lastActivityAt ? Math.max(0, Math.round((nowMs - lastActivityAt) / 1000)) : 0;
+  const isCurrentLeader = Boolean(gameLeader && gameLeader.id === playerId);
+  const isMissionMember = Boolean(gameState?.activeProposal?.team.includes(playerId));
+  const isAssassin = roleView?.self.role === "assassin";
+  const waitCopy = protocolWaitCopy({
+    genesisReady: genesis.ready,
+    keyedCount: rolePlayerIds.length,
+    rolePhase,
+    commitCount,
+    revealCount,
+    gameState,
+    gameSnapshot,
+    isCurrentLeader,
+    isMissionMember,
+    isAssassin,
+  });
+  const systemBanner =
+    terminated
+      ? {
+          tone: "danger",
+          title: "Protocol paused locally",
+          detail: "This device will keep verifying incoming events, but it will not send new signed protocol events until resumed.",
+        }
+      : socketState !== "open"
+        ? {
+            tone: "danger",
+            title: "Relay reconnecting",
+            detail: "The room will retry automatically. If the browser was backgrounded, Reconnect also forces a fresh replay.",
+          }
+        : offlinePlayers.length
+          ? {
+              tone: "wait",
+              title: `${offlinePlayers.length} player${offlinePlayers.length > 1 ? "s" : ""} away`,
+              detail: `${offlinePlayers.map((player) => player.name).join(" · ")} must reopen the page before the next round can move smoothly.`,
+            }
+          : idleSeconds * 1_000 > PROTOCOL_WAIT_MS && gameState?.phase !== "ended"
+            ? {
+                tone: "wait",
+                title: `${idleSeconds}s without relay activity`,
+                detail: waitCopy,
+              }
+            : {
+                tone: rolePhase === "ready" ? "ready" : "wait",
+                title: rolePhase === "ready" ? "Protocol live" : "Protocol waiting",
+                detail: waitCopy,
+              };
+  const canSendProtocol = socketState === "open" && !terminated;
+  const canSendPublicEvent = canSendProtocol && draft.trim().length > 0;
+  const canCommit = canSendProtocol && genesis.ready && Boolean(roleSeed) && !localCommitted;
   const canReveal =
-    socketState === "open" &&
+    canSendProtocol &&
     genesis.ready &&
     Boolean(roleSeed) &&
     localCommitted &&
     !localRevealed &&
     commitCount === rolePlayerIds.length;
-  const isCurrentLeader = Boolean(gameLeader && gameLeader.id === playerId);
-  const isMissionMember = Boolean(gameState?.activeProposal?.team.includes(playerId));
-  const isAssassin = roleView?.self.role === "assassin";
   const canProposeTeam =
-    socketState === "open" &&
+    canSendProtocol &&
     rolePhase === "ready" &&
     gameState?.phase === "proposal" &&
     isCurrentLeader &&
     selectedTeam.length === (gameQuest?.teamSize ?? 0);
-  const canCommitTeamVote = socketState === "open" && gameState?.phase === "teamVote" && !localTeamVote;
-  const canRevealTeamVote = socketState === "open" && gameState?.phase === "teamVote" && Boolean(localTeamVote);
+  const canCommitTeamVote = canSendProtocol && gameState?.phase === "teamVote" && !localTeamVote;
+  const canRevealTeamVote = canSendProtocol && gameState?.phase === "teamVote" && Boolean(localTeamVote);
   const canCommitMissionVote =
-    socketState === "open" && gameState?.phase === "missionVote" && isMissionMember && !localMissionVote;
+    canSendProtocol && gameState?.phase === "missionVote" && isMissionMember && !localMissionVote;
   const canRevealMissionVote =
-    socketState === "open" && gameState?.phase === "missionVote" && isMissionMember && Boolean(localMissionVote);
+    canSendProtocol && gameState?.phase === "missionVote" && isMissionMember && Boolean(localMissionVote);
   const canAssassinate =
-    socketState === "open" && gameState?.phase === "assassination" && isAssassin && Boolean(assassinationTarget);
+    canSendProtocol && gameState?.phase === "assassination" && isAssassin && Boolean(assassinationTarget);
 
   return (
     <main className="room-app">
@@ -919,6 +1058,20 @@ export function RoomClient({ roomId }: { roomId: string }) {
           <span>{socketState}</span>
         </div>
       </header>
+
+      <section className={`system-banner ${systemBanner.tone}`} aria-live="polite">
+        <div>
+          {systemBanner.tone === "ready" ? <CheckCircle2 aria-hidden="true" size={19} /> : <AlertTriangle aria-hidden="true" size={19} />}
+          <span>
+            <strong>{systemBanner.title}</strong>
+            <small>{systemBanner.detail}</small>
+          </span>
+        </div>
+        <button type="button" className={terminated ? "quiet-button" : "danger-command"} onClick={terminated ? resumeLocalProtocol : abortLocalProtocol}>
+          <PauseCircle aria-hidden="true" size={18} />
+          <span>{terminated ? "Resume protocol" : "Abort locally"}</span>
+        </button>
+      </section>
 
       <section className="room-layout">
         <aside className="room-sidebar">
@@ -1063,7 +1216,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
                           type="button"
                           className={selected ? "selected" : ""}
                           onClick={() => toggleTeamSelection(player.id, gameQuest?.teamSize ?? 0)}
-                          disabled={!isCurrentLeader}
+                          disabled={!isCurrentLeader || terminated}
                         >
                           <span>{player.name}</span>
                           <small>Seat {player.seat}</small>
@@ -1146,7 +1299,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
                         type="button"
                         className={assassinationTarget === player.id ? "selected" : ""}
                         onClick={() => setAssassinationTarget(player.id)}
-                        disabled={!isAssassin}
+                        disabled={!isAssassin || terminated}
                       >
                         <span>{player.name}</span>
                         <small>Seat {player.seat}</small>
@@ -1197,8 +1350,21 @@ export function RoomClient({ roomId }: { roomId: string }) {
             </div>
           </div>
           <div className="relay-composer">
-            <input value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={120} />
-            <button type="button" onClick={sendPublicEvent}>
+            <input
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void sendPublicEvent();
+                }
+              }}
+              maxLength={120}
+              autoComplete="off"
+              enterKeyHint="send"
+              disabled={terminated}
+            />
+            <button type="button" onClick={sendPublicEvent} disabled={!canSendPublicEvent}>
               <Send aria-hidden="true" size={18} />
               <span>Send</span>
             </button>
@@ -1235,6 +1401,97 @@ function RoomStat({
       <strong>{value}</strong>
     </div>
   );
+}
+
+function protocolWaitCopy({
+  genesisReady: roomGenesisReady,
+  keyedCount,
+  rolePhase,
+  commitCount,
+  revealCount,
+  gameState,
+  gameSnapshot,
+  isCurrentLeader,
+  isMissionMember,
+  isAssassin,
+}: {
+  genesisReady: boolean;
+  keyedCount: number;
+  rolePhase: RoleProtocolStatus;
+  commitCount: number;
+  revealCount: number;
+  gameState: GameState | null;
+  gameSnapshot: GameProtocolSnapshot;
+  isCurrentLeader: boolean;
+  isMissionMember: boolean;
+  isAssassin: boolean;
+}) {
+  if (!roomGenesisReady) {
+    const missing = Math.max(5 - keyedCount, 0);
+    return missing ? `Need ${missing} more keyed player${missing > 1 ? "s" : ""} before the role seed protocol can start.` : "Waiting for a stable signed room genesis.";
+  }
+
+  if (rolePhase === "commit") {
+    const missing = Math.max(keyedCount - commitCount, 0);
+    return `Waiting for ${missing} sealed role seed commitment${missing > 1 ? "s" : ""}.`;
+  }
+
+  if (rolePhase === "reveal") {
+    const missing = Math.max(keyedCount - revealCount, 0);
+    return `Waiting for ${missing} role seed reveal${missing > 1 ? "s" : ""}.`;
+  }
+
+  if (rolePhase === "assigning") {
+    return "Combining revealed seeds in the local worker. The cryptography package is loaded only at this step.";
+  }
+
+  if (rolePhase === "error") {
+    return "The local role worker failed or timed out. Reconnect, request replay, or pause locally before restarting the room.";
+  }
+
+  if (!gameState) {
+    return "Role protocol is complete. Waiting for the public game state to initialize.";
+  }
+
+  if (gameState.phase === "proposal") {
+    return isCurrentLeader ? "You are leader. Select the exact quest team, then publish the signed proposal." : "Waiting for the current leader to publish a signed team proposal.";
+  }
+
+  if (gameState.phase === "teamVote") {
+    const pending = gameSnapshot.pending.teamVote;
+    if (!pending) {
+      return "Collecting signed team vote envelopes.";
+    }
+
+    const missingCommits = Math.max(pending.required - pending.commits, 0);
+    if (missingCommits) {
+      return `Waiting for ${missingCommits} team vote commitment${missingCommits > 1 ? "s" : ""}.`;
+    }
+
+    const missingReveals = Math.max(pending.required - pending.reveals, 0);
+    return missingReveals ? `Waiting for ${missingReveals} team vote reveal${missingReveals > 1 ? "s" : ""}.` : "All team votes are revealed. Deriving the next public phase.";
+  }
+
+  if (gameState.phase === "missionVote") {
+    const pending = gameSnapshot.pending.missionVote;
+    if (!pending) {
+      return isMissionMember ? "You are on the mission team. Commit a private mission result." : "Waiting for the mission team to commit private mission results.";
+    }
+
+    const missingCommits = Math.max(pending.required - pending.commits, 0);
+    if (missingCommits) {
+      return `Waiting for ${missingCommits} mission vote commitment${missingCommits > 1 ? "s" : ""}.`;
+    }
+
+    const missingReveals = Math.max(pending.required - pending.reveals, 0);
+    return missingReveals ? `Waiting for ${missingReveals} mission vote reveal${missingReveals > 1 ? "s" : ""}.` : "All mission votes are revealed. Deriving the quest result.";
+  }
+
+  if (gameState.phase === "assassination") {
+    return isAssassin ? "You are Assassin. Choose Merlin and resolve the final signed event." : "Waiting for Assassin to choose Merlin.";
+  }
+
+  return `${gameState.winner === "good" ? "Good" : "Evil"} won. Clear local secrets when every player has recorded the ending.`;
 }
 
 function parseRelayEvent(raw: string): RelayEvent | null {

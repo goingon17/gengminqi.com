@@ -49,6 +49,8 @@ body {
   color: var(--paper);
   font-family: var(--font-body);
   letter-spacing: 0;
+  overscroll-behavior-y: none;
+  -webkit-font-smoothing: antialiased;
 }
 
 .avalon-app button {
@@ -656,6 +658,74 @@ body {
   gap: var(--space-3);
 }
 
+.system-banner {
+  width: min(1180px, 100%);
+  min-height: 72px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  border: 1px solid rgba(245, 239, 226, 0.13);
+  border-radius: var(--radius-md);
+  background:
+    linear-gradient(135deg, rgba(245, 239, 226, 0.065), transparent 56%),
+    rgba(21, 23, 27, 0.72);
+  box-shadow: 0 18px 70px rgba(0, 0, 0, 0.24);
+  margin: var(--space-2) auto 0;
+  padding: var(--space-3);
+  backdrop-filter: blur(18px);
+}
+
+.system-banner > div {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.system-banner svg {
+  flex: 0 0 auto;
+}
+
+.system-banner span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.system-banner strong {
+  color: var(--paper);
+}
+
+.system-banner small {
+  color: var(--paper-dim);
+  overflow-wrap: anywhere;
+}
+
+.system-banner.ready {
+  border-color: rgba(79, 123, 94, 0.5);
+}
+
+.system-banner.ready svg {
+  color: #ccebd1;
+}
+
+.system-banner.wait {
+  border-color: rgba(196, 163, 90, 0.5);
+}
+
+.system-banner.wait svg {
+  color: var(--gold-soft);
+}
+
+.system-banner.danger {
+  border-color: rgba(156, 48, 48, 0.55);
+}
+
+.system-banner.danger svg {
+  color: #f0bbb7;
+}
+
 .room-brand {
   display: inline-flex;
   align-items: center;
@@ -1108,6 +1178,7 @@ button {
   justify-content: center;
   gap: 10px;
   padding: 0 16px;
+  touch-action: manipulation;
   white-space: nowrap;
 }
 
@@ -1123,6 +1194,7 @@ input {
   border-radius: 8px;
   background: rgba(16, 13, 12, 0.72);
   color: var(--paper);
+  font-size: max(16px, 1rem);
   padding: 0 12px;
   outline: none;
 }
@@ -1555,6 +1627,15 @@ h2 {
     min-height: 56px;
   }
 
+  .system-banner {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .system-banner button {
+    width: 100%;
+  }
+
   .room-title {
     font-size: clamp(3rem, 18vw, 4.7rem);
   }
@@ -1589,5 +1670,16 @@ h2 {
   .relay-event-list li {
     grid-template-columns: 1fr;
     gap: 6px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
   }
 }

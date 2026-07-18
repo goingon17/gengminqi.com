@@ -10,6 +10,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
+    "release:check": "node scripts/release-check.mjs",
     "stage0:node": "node scripts/stage0-node-smoke.mjs",
     "postinstall": "node scripts/prepare-jiff.mjs"
   },
