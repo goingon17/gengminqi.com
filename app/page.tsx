@@ -1,5 +1,5 @@
-import { StageZeroClient } from "./stage0/stage-zero-client";
+import { AvalonPrototype } from "./avalon-prototype";
 
 export default function Home() {
-  return <StageZeroClient />;
+  return <AvalonPrototype />;
 }

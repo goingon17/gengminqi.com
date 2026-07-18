@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Avalon Local Protocol",
-  description: "A browser-local Avalon protocol spike with Vercel as an encrypted relay.",
+  description: "A browser-local Avalon table where the server only relays encrypted moves.",
 };
 
 export const viewport: Viewport = {
