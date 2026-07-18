@@ -25,6 +25,11 @@ export function redisConfigured(): boolean {
   return Boolean(process.env.REDIS_URL);
 }
 
+export function resetRedisForTests(): void {
+  sharedRedis?.disconnect();
+  sharedRedis = undefined;
+}
+
 export function fieldsToObject(flat: string[]): Record<string, string> {
   const out: Record<string, string> = {};
   for (let i = 0; i + 1 < flat.length; i += 2) {

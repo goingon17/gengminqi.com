@@ -1,5 +1,17 @@
-import { parseClientFrame, type RelayEnvelope } from "@/lib/protocol/envelope";
+import {
+  isRelayEnvelope,
+  parseClientFrame,
+  type RelayEnvelope,
+} from "@/lib/protocol/envelope";
 import { fieldsToObject, getRedis, redisConfigured } from "@/lib/relay/redis";
+import {
+  ensureRoomForSocketJoin,
+  getRoom,
+  lockRoom,
+  normalizeRoomId,
+  touchRoomPlayer,
+  type PublicRoom,
+} from "@/lib/relay/rooms";
 
 type RelaySocket = {
   readyState: number;
@@ -14,6 +26,8 @@ type Connection = {
   name: string | null;
   joinedAt: number;
   lastSeen: number;
+  sentAt: number[];
+  heartbeatTimer: ReturnType<typeof setInterval>;
 };
 
 type ServerEvent =
@@ -22,11 +36,21 @@ type ServerEvent =
       roomId: string;
       connectionId: string;
       redisConfigured: boolean;
+      room?: PublicRoom;
     }
   | {
       type: "presence";
       roomId: string;
       peers: Array<{ playerId: string; name: string }>;
+    }
+  | {
+      type: "room";
+      room: PublicRoom;
+    }
+  | {
+      type: "heartbeat";
+      now: number;
+      roomId?: string;
     }
   | {
       type: "envelope";
@@ -44,6 +68,18 @@ type ServerEvent =
       message: string;
     };
 
+type FanoutPayload =
+  | {
+      kind: "envelope";
+      envelope: RelayEnvelope;
+      origin: string;
+    }
+  | {
+      kind: "room";
+      roomId: string;
+      origin: string;
+    };
+
 type RedisStreamEntry = [string, string[]];
 type RedisStreamResponse = Array<[string, RedisStreamEntry[]]>;
 
@@ -55,19 +91,22 @@ type HubState = {
   lastFanoutId: string;
 };
 
-const FANOUT_STREAM = "avalon:stage0:fanout";
-const ROOM_STREAM_PREFIX = "avalon:stage0:room:";
+const FANOUT_STREAM = "avalon:relay:fanout";
+const ROOM_STREAM_PREFIX = "avalon:relay:room:";
 const FANOUT_MAXLEN = 5_000;
 const ROOM_MAXLEN = 1_000;
 const ROOM_TTL_SECONDS = 60 * 60 * 6;
 const BLOCK_MS = 5_000;
+const HEARTBEAT_MS = 15_000;
+const RATE_WINDOW_MS = 10_000;
+const RATE_LIMIT = 30;
 
 const globalForHub = globalThis as typeof globalThis & {
-  __avalonStage0Hub?: HubState;
+  __avalonRelayHub?: HubState;
 };
 
 const hub =
-  globalForHub.__avalonStage0Hub ??
+  globalForHub.__avalonRelayHub ??
   {
     instanceId: crypto.randomUUID(),
     conns: new Map<RelaySocket, Connection>(),
@@ -76,9 +115,14 @@ const hub =
     lastFanoutId: "0-0",
   };
 
-globalForHub.__avalonStage0Hub = hub;
+globalForHub.__avalonRelayHub = hub;
 
 export function register(ws: RelaySocket): void {
+  const heartbeatTimer = setInterval(() => {
+    const conn = hub.conns.get(ws);
+    send(ws, { type: "heartbeat", now: Date.now(), roomId: conn?.roomId ?? undefined });
+  }, HEARTBEAT_MS);
+
   hub.conns.set(ws, {
     connectionId: crypto.randomUUID(),
     roomId: null,
@@ -86,6 +130,8 @@ export function register(ws: RelaySocket): void {
     name: null,
     joinedAt: Date.now(),
     lastSeen: Date.now(),
+    sentAt: [],
+    heartbeatTimer,
   });
 
   void startStream();
@@ -93,38 +139,84 @@ export function register(ws: RelaySocket): void {
 
 export async function unregister(ws: RelaySocket): Promise<void> {
   const conn = hub.conns.get(ws);
+  if (conn) {
+    clearInterval(conn.heartbeatTimer);
+  }
+
   hub.conns.delete(ws);
 
   if (conn?.roomId) {
-    broadcastPresence(conn.roomId);
+    await broadcastRoomUpdate(conn.roomId);
   }
 }
 
 export async function handleClientFrame(ws: RelaySocket, raw: string): Promise<void> {
-  const frame = parseClientFrame(raw);
   const conn = hub.conns.get(ws);
 
-  if (!frame || !conn) {
-    send(ws, { type: "error", message: "Invalid stage0 frame" });
+  if (!conn || !allowFrame(conn)) {
+    send(ws, { type: "error", message: "Relay rate limit exceeded." });
+    return;
+  }
+
+  const frame = parseClientFrame(raw);
+
+  if (!frame) {
+    send(ws, { type: "error", message: "Invalid relay frame." });
     return;
   }
 
   conn.lastSeen = Date.now();
 
   if (frame.type === "join") {
-    conn.roomId = normalizeRoomId(frame.roomId);
+    const room = await ensureRoomForSocketJoin(frame.roomId, {
+      playerId: frame.playerId,
+      name: frame.name,
+    });
+
+    conn.roomId = room.roomId;
     conn.playerId = frame.playerId;
     conn.name = frame.name;
 
     send(ws, {
       type: "joined",
-      roomId: conn.roomId,
+      roomId: room.roomId,
       connectionId: conn.connectionId,
       redisConfigured: redisConfigured(),
+      room,
     });
 
-    await replayRoom(ws, conn.roomId);
-    broadcastPresence(conn.roomId);
+    await replayRoom(ws, room.roomId);
+    await broadcastRoomUpdate(room.roomId);
+    return;
+  }
+
+  if (frame.type === "heartbeat") {
+    if (!sameConnection(conn, frame.roomId, frame.playerId)) {
+      send(ws, { type: "error", message: "Heartbeat does not match this socket." });
+      return;
+    }
+
+    const room = await touchRoomPlayer(frame.roomId, frame.playerId);
+    if (room) {
+      send(ws, { type: "heartbeat", now: Date.now(), roomId: room.roomId });
+      await broadcastRoomUpdate(room.roomId);
+    }
+    return;
+  }
+
+  if (frame.type === "room.lock") {
+    if (!sameConnection(conn, frame.roomId, frame.playerId)) {
+      send(ws, { type: "error", message: "Lock request does not match this socket." });
+      return;
+    }
+
+    try {
+      const room = await lockRoom(frame.roomId, frame.playerId);
+      broadcastToRoom(room.roomId, { type: "room", room });
+      await publishRoomUpdate(room.roomId);
+    } catch (error) {
+      send(ws, { type: "error", message: errorMessage(error) });
+    }
     return;
   }
 
@@ -134,17 +226,29 @@ export async function handleClientFrame(ws: RelaySocket, raw: string): Promise<v
   }
 
   if (!conn.roomId || !conn.playerId) {
-    send(ws, { type: "error", message: "Join a room before sending envelopes" });
+    send(ws, { type: "error", message: "Join a room before sending envelopes." });
     return;
   }
 
-  if (normalizeRoomId(frame.envelope.roomId) !== conn.roomId || frame.envelope.senderId !== conn.playerId) {
-    send(ws, { type: "error", message: "Envelope sender or room does not match this socket" });
+  const envelopeRoomId = normalizeRoomId(frame.envelope.roomId);
+  if (envelopeRoomId !== conn.roomId || frame.envelope.senderId !== conn.playerId) {
+    send(ws, { type: "error", message: "Envelope sender or room does not match this socket." });
     return;
   }
 
-  broadcastEnvelope(frame.envelope, "local");
-  await persistEnvelope(frame.envelope);
+  const room = await touchRoomPlayer(conn.roomId, conn.playerId);
+  if (!room) {
+    send(ws, { type: "error", message: "Room not found." });
+    return;
+  }
+
+  const envelope = {
+    ...frame.envelope,
+    roomId: envelopeRoomId,
+  };
+
+  broadcastEnvelope(envelope, "local");
+  await persistEnvelope(envelope);
 }
 
 export function getRelayStatus() {
@@ -154,18 +258,34 @@ export function getRelayStatus() {
     redisConfigured: redisConfigured(),
     fanoutStream: FANOUT_STREAM,
     roomTtlSeconds: ROOM_TTL_SECONDS,
+    heartbeatMs: HEARTBEAT_MS,
+    rateLimit: {
+      frameCount: RATE_LIMIT,
+      windowMs: RATE_WINDOW_MS,
+    },
   };
 }
 
-function broadcastPresence(roomId: string): void {
-  const peers = Array.from(hub.conns.values())
-    .filter((conn) => conn.roomId === roomId && conn.playerId && conn.name)
-    .map((conn) => ({
-      playerId: conn.playerId as string,
-      name: conn.name as string,
+async function broadcastRoomUpdate(roomId: string): Promise<void> {
+  const room = await getRoom(roomId);
+  if (!room) {
+    return;
+  }
+
+  broadcastToRoom(room.roomId, { type: "room", room });
+  broadcastPresence(room);
+  await publishRoomUpdate(room.roomId);
+}
+
+function broadcastPresence(room: PublicRoom): void {
+  const peers = room.players
+    .filter((player) => player.online)
+    .map((player) => ({
+      playerId: player.id,
+      name: player.name,
     }));
 
-  broadcastToRoom(roomId, { type: "presence", roomId, peers });
+  broadcastToRoom(room.roomId, { type: "presence", roomId: room.roomId, peers });
 }
 
 function broadcastEnvelope(envelope: RelayEnvelope, relay: "local" | "redis"): void {
@@ -217,14 +337,29 @@ async function persistEnvelope(envelope: RelayEnvelope): Promise<void> {
     FANOUT_MAXLEN,
     "*",
     "d",
-    data,
-    "o",
-    hub.instanceId,
+    JSON.stringify({ kind: "envelope", envelope, origin: hub.instanceId } satisfies FanoutPayload),
   );
 
   const key = roomStreamKey(envelope.roomId);
   await redis.xadd(key, "MAXLEN", "~", ROOM_MAXLEN, "*", "d", data);
   await redis.expire(key, ROOM_TTL_SECONDS);
+}
+
+async function publishRoomUpdate(roomId: string): Promise<void> {
+  const redis = getRedis();
+  if (!redis) {
+    return;
+  }
+
+  await redis.xadd(
+    FANOUT_STREAM,
+    "MAXLEN",
+    "~",
+    FANOUT_MAXLEN,
+    "*",
+    "d",
+    JSON.stringify({ kind: "room", roomId, origin: hub.instanceId } satisfies FanoutPayload),
+  );
 }
 
 async function startStream(): Promise<void> {
@@ -274,14 +409,19 @@ async function runReadLoop(): Promise<void> {
       for (const [, entries] of res) {
         for (const [id, flat] of entries) {
           hub.lastFanoutId = id;
-          const fields = fieldsToObject(flat);
-          if (fields.o === hub.instanceId) {
+          const payload = parseFanoutPayload(fieldsToObject(flat).d);
+          if (!payload || payload.origin === hub.instanceId) {
             continue;
           }
 
-          const envelope = parseEnvelopePayload(fields.d);
-          if (envelope) {
-            broadcastEnvelope(envelope, "redis");
+          if (payload.kind === "envelope") {
+            broadcastEnvelope(payload.envelope, "redis");
+          } else {
+            const room = await getRoom(payload.roomId);
+            if (room) {
+              broadcastToRoom(room.roomId, { type: "room", room });
+              broadcastPresence(room);
+            }
           }
         }
       }
@@ -297,11 +437,58 @@ function parseEnvelopePayload(value: string | undefined): RelayEnvelope | null {
   }
 
   try {
-    const parsed = JSON.parse(value) as RelayEnvelope;
-    return parsed.protocolVersion === 1 ? parsed : null;
+    const parsed = JSON.parse(value) as unknown;
+    return isRelayEnvelope(parsed) ? parsed : null;
   } catch {
     return null;
   }
+}
+
+function parseFanoutPayload(value: string | undefined): FanoutPayload | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!isRecord(parsed) || typeof parsed.origin !== "string") {
+      return null;
+    }
+
+    if (parsed.kind === "envelope" && isRelayEnvelope(parsed.envelope)) {
+      return {
+        kind: "envelope",
+        envelope: parsed.envelope,
+        origin: parsed.origin,
+      };
+    }
+
+    if (parsed.kind === "room" && typeof parsed.roomId === "string") {
+      return {
+        kind: "room",
+        roomId: normalizeRoomId(parsed.roomId),
+        origin: parsed.origin,
+      };
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+function sameConnection(conn: Connection, roomId: string, playerId: string): boolean {
+  return conn.roomId === normalizeRoomId(roomId) && conn.playerId === playerId;
+}
+
+function allowFrame(conn: Connection): boolean {
+  const now = Date.now();
+  conn.sentAt = conn.sentAt.filter((time) => now - time <= RATE_WINDOW_MS);
+  if (conn.sentAt.length >= RATE_LIMIT) {
+    return false;
+  }
+  conn.sentAt.push(now);
+  return true;
 }
 
 function send(ws: RelaySocket, event: ServerEvent): void {
@@ -312,8 +499,12 @@ function send(ws: RelaySocket, event: ServerEvent): void {
   ws.send(JSON.stringify(event));
 }
 
-function normalizeRoomId(roomId: string): string {
-  return roomId.trim().toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 32);
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Room operation failed.";
 }
 
 function roomStreamKey(roomId: string): string {

@@ -19,6 +19,16 @@ export type ClientFrame =
       name: string;
     }
   | {
+      type: "heartbeat";
+      roomId: string;
+      playerId: string;
+    }
+  | {
+      type: "room.lock";
+      roomId: string;
+      playerId: string;
+    }
+  | {
       type: "envelope";
       envelope: RelayEnvelope;
     }
@@ -48,6 +58,28 @@ export function parseClientFrame(raw: string): ClientFrame | null {
       }
 
       return { type: "join", roomId, playerId, name };
+    }
+
+    if (parsed.type === "heartbeat") {
+      const roomId = readString(parsed.roomId, 64);
+      const playerId = readString(parsed.playerId, 128);
+
+      if (!roomId || !playerId) {
+        return null;
+      }
+
+      return { type: "heartbeat", roomId, playerId };
+    }
+
+    if (parsed.type === "room.lock") {
+      const roomId = readString(parsed.roomId, 64);
+      const playerId = readString(parsed.playerId, 128);
+
+      if (!roomId || !playerId) {
+        return null;
+      }
+
+      return { type: "room.lock", roomId, playerId };
     }
 
     if (parsed.type === "replay") {

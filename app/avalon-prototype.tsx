@@ -16,7 +16,8 @@ import {
   Users,
   Vote,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 
 type PrototypeSurface = "entry" | "lobby" | "role" | "quest";
 
@@ -55,11 +56,72 @@ const questTrack = [
 ];
 
 export function AvalonPrototype() {
+  const router = useRouter();
   const [surface, setSurface] = useState<PrototypeSurface>("entry");
+  const [playerName, setPlayerName] = useState("Mira");
+  const [roomCode, setRoomCode] = useState("AVN042");
+  const [busy, setBusy] = useState<"create" | "join" | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const activeIndex = useMemo(
     () => surfaces.findIndex((item) => item.id === surface),
     [surface],
   );
+
+  useEffect(() => {
+    const savedName = localStorage.getItem("avalon:playerName");
+    if (savedName) {
+      queueMicrotask(() => {
+        setPlayerName(savedName);
+      });
+    }
+  }, []);
+
+  async function createRoom() {
+    setBusy("create");
+    setError(null);
+
+    try {
+      const playerId = getOrCreatePlayerId();
+      localStorage.setItem("avalon:playerName", cleanName(playerName));
+      const response = await fetch("/api/rooms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ playerId, name: cleanName(playerName) }),
+      });
+      const body = (await response.json()) as { room?: { roomId: string }; error?: string };
+      if (!response.ok || !body.room) {
+        throw new Error(body.error ?? "Could not create room.");
+      }
+      router.push(`/room/${body.room.roomId}`);
+    } catch (createError) {
+      setError(errorText(createError));
+      setBusy(null);
+    }
+  }
+
+  async function joinExistingRoom() {
+    setBusy("join");
+    setError(null);
+
+    try {
+      const playerId = getOrCreatePlayerId();
+      const normalizedRoom = roomCode.trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
+      localStorage.setItem("avalon:playerName", cleanName(playerName));
+      const response = await fetch("/api/rooms", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roomId: normalizedRoom, playerId, name: cleanName(playerName) }),
+      });
+      const body = (await response.json()) as { room?: { roomId: string }; error?: string };
+      if (!response.ok || !body.room) {
+        throw new Error(body.error ?? "Could not join room.");
+      }
+      router.push(`/room/${body.room.roomId}`);
+    } catch (joinError) {
+      setError(errorText(joinError));
+      setBusy(null);
+    }
+  }
 
   return (
     <main className="avalon-app">
@@ -95,15 +157,16 @@ export function AvalonPrototype() {
               server carries sealed envelopes and forgets the room.
             </p>
             <div className="hero-actions">
-              <button type="button" onClick={() => setSurface("lobby")}>
+              <button type="button" onClick={createRoom} disabled={busy !== null}>
                 <Play aria-hidden="true" size={18} />
-                <span>Create room</span>
+                <span>{busy === "create" ? "Creating" : "Create room"}</span>
               </button>
-              <button type="button" className="quiet-button" onClick={() => setSurface("quest")}>
+              <button type="button" className="quiet-button" onClick={() => setSurface("entry")}>
                 <KeyRound aria-hidden="true" size={18} />
-                <span>Open table</span>
+                <span>Join by code</span>
               </button>
             </div>
+            {error ? <p className="prototype-error">{error}</p> : null}
           </div>
 
           <div className="table-scene" aria-label="Avalon table preview">
@@ -115,7 +178,16 @@ export function AvalonPrototype() {
       <section className="prototype-stage" aria-live="polite">
         <div className="stage-frame">
           <div className="phone-shell">
-            <PrototypeScreen surface={surface} />
+            <PrototypeScreen
+              surface={surface}
+              playerName={playerName}
+              roomCode={roomCode}
+              busy={busy}
+              error={error}
+              onPlayerNameChange={setPlayerName}
+              onRoomCodeChange={setRoomCode}
+              onJoinRoom={joinExistingRoom}
+            />
           </div>
           <aside className="control-rail" aria-label="Table state">
             <RailItem icon={Lock} label="Genesis" value="5 signed" />
@@ -129,7 +201,25 @@ export function AvalonPrototype() {
   );
 }
 
-function PrototypeScreen({ surface }: { surface: PrototypeSurface }) {
+function PrototypeScreen({
+  surface,
+  playerName,
+  roomCode,
+  busy,
+  error,
+  onPlayerNameChange,
+  onRoomCodeChange,
+  onJoinRoom,
+}: {
+  surface: PrototypeSurface;
+  playerName: string;
+  roomCode: string;
+  busy: "create" | "join" | null;
+  error: string | null;
+  onPlayerNameChange: (value: string) => void;
+  onRoomCodeChange: (value: string) => void;
+  onJoinRoom: () => void;
+}) {
   if (surface === "lobby") {
     return <LobbyScreen />;
   }
@@ -142,33 +232,64 @@ function PrototypeScreen({ surface }: { surface: PrototypeSurface }) {
     return <QuestScreen />;
   }
 
-  return <EntryScreen />;
+  return (
+    <EntryScreen
+      playerName={playerName}
+      roomCode={roomCode}
+      busy={busy}
+      error={error}
+      onPlayerNameChange={onPlayerNameChange}
+      onRoomCodeChange={onRoomCodeChange}
+      onJoinRoom={onJoinRoom}
+    />
+  );
 }
 
-function EntryScreen() {
+function EntryScreen({
+  playerName,
+  roomCode,
+  busy,
+  error,
+  onPlayerNameChange,
+  onRoomCodeChange,
+  onJoinRoom,
+}: {
+  playerName: string;
+  roomCode: string;
+  busy: "create" | "join" | null;
+  error: string | null;
+  onPlayerNameChange: (value: string) => void;
+  onRoomCodeChange: (value: string) => void;
+  onJoinRoom: () => void;
+}) {
+  const displayCode = roomCode.padEnd(6, " ").slice(0, 6).split("");
+
   return (
     <section className="mobile-screen entry-screen">
-      <ScreenHeader eyebrow="Room" title="Gather the table" action="AVN-042" />
+      <ScreenHeader eyebrow="Room" title="Gather the table" action="Join" />
       <div className="room-code">
-        <span>A</span>
-        <span>V</span>
-        <span>N</span>
-        <span>0</span>
-        <span>4</span>
-        <span>2</span>
+        {displayCode.map((letter, index) => (
+          <span key={`${letter}-${index}`}>{letter.trim() || "·"}</span>
+        ))}
       </div>
       <label className="prototype-field">
         <span>Name</span>
-        <input defaultValue="Mira" />
+        <input value={playerName} onChange={(event) => onPlayerNameChange(event.target.value)} />
       </label>
       <label className="prototype-field">
         <span>Room code</span>
-        <input defaultValue="AVN-042" />
+        <input
+          value={roomCode}
+          maxLength={8}
+          autoCapitalize="characters"
+          onChange={(event) => onRoomCodeChange(event.target.value.toUpperCase())}
+        />
       </label>
-      <button type="button" className="wide-command">
+      <button type="button" className="wide-command" onClick={onJoinRoom} disabled={busy !== null}>
         <ArrowRight aria-hidden="true" size={18} />
-        <span>Enter lobby</span>
+        <span>{busy === "join" ? "Joining" : "Enter lobby"}</span>
       </button>
+      {error ? <p className="prototype-error compact">{error}</p> : null}
       <StatusStrip />
     </section>
   );
@@ -341,4 +462,24 @@ function StatusStrip() {
       <strong>Idle</strong>
     </div>
   );
+}
+
+function getOrCreatePlayerId(): string {
+  const existing = localStorage.getItem("avalon:playerId");
+  if (existing) {
+    return existing;
+  }
+
+  const playerId = crypto.randomUUID();
+  localStorage.setItem("avalon:playerId", playerId);
+  return playerId;
+}
+
+function cleanName(value: string): string {
+  const trimmed = value.trim().slice(0, 32);
+  return trimmed || "Player";
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : "Room action failed.";
 }
