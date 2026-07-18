@@ -1051,7 +1051,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
       <header className="room-header">
         <Link href="/" className="room-brand" aria-label="Back to Avalon home">
           <Castle aria-hidden="true" size={24} />
-          <span>Avalon</span>
+          <span>The Oath of Avalon</span>
         </Link>
         <div className={`room-connection ${socketState}`}>
           <Radio aria-hidden="true" size={17} />
@@ -1076,21 +1076,21 @@ export function RoomClient({ roomId }: { roomId: string }) {
       <section className="room-layout">
         <aside className="room-sidebar">
           <div>
-            <p className="prototype-kicker">Room</p>
+            <p className="prototype-kicker">Council sigil</p>
             <h1 className="room-title">{normalizedRoomId}</h1>
           </div>
           <div className="room-actions">
             <button type="button" onClick={() => void navigator.clipboard.writeText(window.location.href)}>
               <Copy aria-hidden="true" size={18} />
-              <span>Copy link</span>
+              <span>Copy summons</span>
             </button>
             <button type="button" className="quiet-button" onClick={reconnectNow}>
               <RefreshCcw aria-hidden="true" size={18} />
-              <span>Reconnect</span>
+              <span>Recall courier</span>
             </button>
             <button type="button" className="danger-command" onClick={lockCurrentRoom} disabled={room?.locked}>
               <Lock aria-hidden="true" size={18} />
-              <span>{room?.locked ? "Locked" : "Lock room"}</span>
+              <span>{room?.locked ? "Council sealed" : "Seal council"}</span>
             </button>
           </div>
           <div className="room-stat-grid">
@@ -1099,7 +1099,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
             <RoomStat icon={Activity} label="TTL" value={room ? `${Math.round(room.ttlSeconds / 3600)}h` : "-"} />
           </div>
           <div className="genesis-card">
-            <span>Genesis</span>
+            <span>Founding oath</span>
             <strong>{genesis.words.length ? genesis.words.join(" · ") : "waiting"}</strong>
             <small>{genesis.ready ? `ready ${genesis.hash.slice(0, 12)}` : "needs 5 keyed players"}</small>
           </div>
@@ -1108,8 +1108,8 @@ export function RoomClient({ roomId }: { roomId: string }) {
         <section className="room-panel">
           <div className="room-panel-heading">
             <div>
-              <p className="prototype-kicker">Lobby</p>
-              <h2>Players at the table</h2>
+              <p className="prototype-kicker">The fellowship</p>
+              <h2>Knights at the round table</h2>
             </div>
             <span className={room?.locked ? "ready-chip" : "wait-chip"}>
               {room?.locked ? "Locked" : "Open"}
@@ -1135,8 +1135,8 @@ export function RoomClient({ roomId }: { roomId: string }) {
         <section className="room-panel role-protocol-panel">
           <div className="room-panel-heading">
             <div>
-              <p className="prototype-kicker">Role MPC</p>
-              <h2>Private role protocol</h2>
+              <p className="prototype-kicker">The oracle · MPC</p>
+              <h2>The sealed vision</h2>
             </div>
             <span className={rolePhase === "ready" ? "ready-chip" : "wait-chip"}>{rolePhase}</span>
           </div>
@@ -1180,7 +1180,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
         <section className="room-panel game-protocol-panel">
           <div className="room-panel-heading">
             <div>
-              <p className="prototype-kicker">Game protocol</p>
+              <p className="prototype-kicker">The book of quests</p>
               <h2>{gameState ? formatPhase(gameState.phase) : "Waiting for five players"}</h2>
             </div>
             <span className={gameState?.phase === "ended" ? "ready-chip" : "wait-chip"}>
@@ -1345,8 +1345,8 @@ export function RoomClient({ roomId }: { roomId: string }) {
         <section className="room-panel">
           <div className="room-panel-heading">
             <div>
-              <p className="prototype-kicker">Relay tape</p>
-              <h2>Ordered public events</h2>
+              <p className="prototype-kicker">The courier ledger</p>
+              <h2>Sealed messages in order</h2>
             </div>
           </div>
           <div className="relay-composer">

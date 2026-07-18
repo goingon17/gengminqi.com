@@ -35,10 +35,10 @@ const surfaces: Array<{
   label: string;
   icon: React.ComponentType<{ size?: number }>;
 }> = [
-  { id: "entry", label: "Entry", icon: Castle },
-  { id: "lobby", label: "Lobby", icon: Users },
-  { id: "role", label: "Role", icon: Eye },
-  { id: "quest", label: "Quest", icon: Swords },
+  { id: "entry", label: "The Gate", icon: Castle },
+  { id: "lobby", label: "The Council", icon: Users },
+  { id: "role", label: "The Oracle", icon: Eye },
+  { id: "quest", label: "The Quest", icon: Swords },
 ];
 
 const players: Player[] = [
@@ -132,6 +132,13 @@ export function AvalonPrototype() {
   return (
     <main className="avalon-app">
       <header className="avalon-hero">
+        <div className="castle-masthead" aria-hidden="true">
+          <span>Anno Domini</span>
+          <i />
+          <strong>AVALON</strong>
+          <i />
+          <span>Table V</span>
+        </div>
         <nav className="prototype-tabs" aria-label="Prototype screens">
           {surfaces.map((item, index) => {
             const Icon = item.icon;
@@ -154,23 +161,29 @@ export function AvalonPrototype() {
         <section className="hero-grid">
           <div className="hero-copy">
             <div className="brand-mark" aria-label="Avalon Local Protocol">
-              <span>AV</span>
+              <Crown aria-hidden="true" size={27} />
             </div>
-            <p className="prototype-kicker">Local protocol table</p>
-            <h1 className="avalon-title">Avalon without a dealer</h1>
+            <p className="prototype-kicker">A cryptographic game of loyalty &amp; deceit</p>
+            <h1 className="avalon-title">The Oath of Avalon</h1>
             <p className="avalon-deck">
-              Roles, private sight, and quest secrets live between browsers. The
-              server carries sealed envelopes and forgets the room.
+              No king keeps the ledger. Roles, visions, and quest secrets remain
+              with the fellowship; the server bears only sealed messages between
+              their browsers.
             </p>
             <div className="hero-actions">
               <button type="button" onClick={createRoom} disabled={busy !== null}>
                 <Play aria-hidden="true" size={18} />
-                <span>{busy === "create" ? "Creating" : "Create room"}</span>
+                <span>{busy === "create" ? "Summoning" : "Convene a council"}</span>
               </button>
               <button type="button" className="quiet-button" onClick={() => setSurface("entry")}>
                 <KeyRound aria-hidden="true" size={18} />
-                <span>Join by code</span>
+                <span>Enter with a sigil</span>
               </button>
+            </div>
+            <div className="hero-footnote" aria-label="Protocol properties">
+              <span>Private by design</span>
+              <span>Five to ten players</span>
+              <span>No dealer required</span>
             </div>
             {error ? <p className="prototype-error">{error}</p> : null}
           </div>
@@ -182,6 +195,14 @@ export function AvalonPrototype() {
       </header>
 
       <section className="prototype-stage" aria-live="polite">
+        <div className="chapter-heading">
+          <span>✦</span>
+          <div>
+            <p>Illuminated protocol</p>
+            <h2>Four leaves from the game</h2>
+          </div>
+          <span>✦</span>
+        </div>
         <div className="stage-frame">
           <div className="phone-shell">
             <PrototypeScreen
@@ -196,10 +217,10 @@ export function AvalonPrototype() {
             />
           </div>
           <aside className="control-rail" aria-label="Table state">
-            <RailItem icon={Lock} label="Genesis" value="5 signed" />
-            <RailItem icon={Shield} label="Relay" value="Redis ready" />
-            <RailItem icon={Vote} label="Vote" value="Commit phase" />
-            <RailItem icon={Crown} label="Leader" value="Mira" />
+            <RailItem icon={Lock} label="The Oath" value="5 seals" />
+            <RailItem icon={Shield} label="Courier" value="Relay ready" />
+            <RailItem icon={Vote} label="Ballot" value="Votes veiled" />
+            <RailItem icon={Crown} label="Crown" value="Mira" />
           </aside>
         </div>
       </section>
@@ -272,18 +293,18 @@ function EntryScreen({
 
   return (
     <section className="mobile-screen entry-screen">
-      <ScreenHeader eyebrow="Room" title="Gather the table" action="Join" />
+      <ScreenHeader eyebrow="The first leaf" title="Gather the fellowship" action="Join" />
       <div className="room-code">
         {displayCode.map((letter, index) => (
           <span key={`${letter}-${index}`}>{letter.trim() || "·"}</span>
         ))}
       </div>
       <label className="prototype-field">
-        <span>Name</span>
+        <span>Your chosen name</span>
         <input value={playerName} onChange={(event) => onPlayerNameChange(event.target.value)} />
       </label>
       <label className="prototype-field">
-        <span>Room code</span>
+        <span>Council sigil</span>
         <input
           value={roomCode}
           maxLength={8}
@@ -293,7 +314,7 @@ function EntryScreen({
       </label>
       <button type="button" className="wide-command" onClick={onJoinRoom} disabled={busy !== null}>
         <ArrowRight aria-hidden="true" size={18} />
-        <span>{busy === "join" ? "Joining" : "Enter lobby"}</span>
+        <span>{busy === "join" ? "Entering" : "Cross the threshold"}</span>
       </button>
       {error ? <p className="prototype-error compact">{error}</p> : null}
       <StatusStrip />
@@ -304,7 +325,7 @@ function EntryScreen({
 function LobbyScreen() {
   return (
     <section className="mobile-screen lobby-screen">
-      <ScreenHeader eyebrow="Lobby" title="Five at the gate" action="Lock" />
+      <ScreenHeader eyebrow="The second leaf" title="Five at the gate" action="Seal" />
       <div className="checksum-bar">
         <span>ash</span>
         <span>crown</span>
@@ -325,7 +346,7 @@ function LobbyScreen() {
       </div>
       <button type="button" className="wide-command">
         <Lock aria-hidden="true" size={18} />
-        <span>Lock genesis</span>
+        <span>Seal the founding oath</span>
       </button>
     </section>
   );
@@ -334,7 +355,7 @@ function LobbyScreen() {
 function RoleScreen() {
   return (
     <section className="mobile-screen role-screen">
-      <ScreenHeader eyebrow="Private view" title="Merlin" action="Seal" />
+      <ScreenHeader eyebrow="The oracle's leaf" title="Merlin" action="Veil" />
       <div className="role-card">
         <div className="role-card-top">
           <Sparkles aria-hidden="true" size={22} />
@@ -359,7 +380,7 @@ function RoleScreen() {
 function QuestScreen() {
   return (
     <section className="mobile-screen quest-screen">
-      <ScreenHeader eyebrow="Round 2" title="Choose the quest" action="Mira" />
+      <ScreenHeader eyebrow="The fourth leaf · Round II" title="Choose the quest" action="Mira" />
       <div className="quest-track" aria-label="Quest track">
         {questTrack.map((quest) => (
           <div key={quest.label} className={`quest-node ${quest.status}`}>
