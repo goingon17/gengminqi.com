@@ -6,11 +6,13 @@ import {
   CheckCircle2,
   Circle,
   Copy,
+  Eye,
   Lock,
   Radio,
   RefreshCcw,
   Send,
   Shield,
+  Sparkles,
   Users,
 } from "lucide-react";
 import Link from "next/link";
@@ -18,8 +20,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { jsonFromBase64Url, jsonToBase64Url } from "@/lib/crypto/codec";
 import {
   appendRoomEnvelope,
+  loadOrCreateRoleSeed,
   loadOrCreatePlayerIdentity,
   loadRoomEnvelopes,
+  type StoredRoleSeed,
 } from "@/lib/crypto/local-store";
 import {
   publicKeysFromIdentity,
@@ -37,6 +41,13 @@ import {
   relayEnvelopeHash,
   verifyRelayEnvelope,
 } from "@/lib/protocol/signed-envelope";
+import {
+  combineRoleSeed,
+  roleSeedCommitment,
+  type RolePrivateView,
+  type RoleProtocolPlayer,
+  type RoleSeedReveal,
+} from "@/lib/protocol/role-assignment";
 import type { PublicRoom } from "@/lib/relay/rooms";
 
 type SocketState = "idle" | "joining" | "open" | "closed" | "error";
@@ -96,6 +107,43 @@ type GenesisSummary = {
   words: string[];
 };
 
+type RoleContribution = {
+  playerId: string;
+  name: string;
+  commitment?: string;
+  secret?: string;
+  committedAt?: number;
+  revealedAt?: number;
+};
+
+type RoleProtocolStatus = "waiting" | "commit" | "reveal" | "assigning" | "ready" | "error";
+
+type RoleWorkerEvent =
+  | {
+      type: "assigned";
+      generatedAt: number;
+      elapsedMs: number;
+      jiffAvailable: boolean;
+      view: RolePrivateView;
+    }
+  | {
+      type: "error";
+      message: string;
+    };
+
+type RoleProtocolEvent =
+  | {
+      type: "none";
+    }
+  | {
+      type: "invalid";
+      message: string;
+    }
+  | {
+      type: "commit" | "reveal";
+      contribution: RoleContribution;
+    };
+
 const HEARTBEAT_MS = 12_000;
 
 export function RoomClient({ roomId }: { roomId: string }) {
@@ -109,14 +157,21 @@ export function RoomClient({ roomId }: { roomId: string }) {
   const seenHashesRef = useRef(new Set<string>());
   const lastHashBySenderRef = useRef(new Map<string, string>());
   const lastSequenceBySenderRef = useRef(new Map<string, number>());
+  const roleWorkerRef = useRef<Worker | null>(null);
 
   const [playerId, setPlayerId] = useState("");
   const [playerName, setPlayerName] = useState("Player");
   const [identity, setIdentity] = useState<PlayerIdentity | null>(null);
+  const [roleSeed, setRoleSeed] = useState<StoredRoleSeed | null>(null);
   const [socketState, setSocketState] = useState<SocketState>("idle");
   const [redisConfigured, setRedisConfigured] = useState(false);
   const [room, setRoom] = useState<PublicRoom | null>(null);
   const [events, setEvents] = useState<PublicRoomEvent[]>([]);
+  const [roleContributions, setRoleContributions] = useState<Record<string, RoleContribution>>({});
+  const [roleStatus, setRoleStatus] = useState<RoleProtocolStatus>("waiting");
+  const [roleView, setRoleView] = useState<RolePrivateView | null>(null);
+  const [roleVisible, setRoleVisible] = useState(false);
+  const [roleWorkerNote, setRoleWorkerNote] = useState("Worker idle");
   const [genesis, setGenesis] = useState<GenesisSummary>({
     ready: false,
     hash: "",
@@ -137,6 +192,25 @@ export function RoomClient({ roomId }: { roomId: string }) {
     }
     return keys;
   }, [identity, room]);
+
+  const rolePlayers = useMemo<RoleProtocolPlayer[]>(
+    () =>
+      (room?.players ?? [])
+        .filter((player) => Boolean(player.publicKeys))
+        .sort((left, right) => left.seat - right.seat)
+        .map((player) => ({
+          id: player.id,
+          name: player.name,
+          seat: player.seat,
+          keyFingerprint: player.publicKeys?.keyFingerprint,
+        })),
+    [room],
+  );
+  const rolePlayerIds = useMemo(() => rolePlayers.map((player) => player.id), [rolePlayers]);
+  const commitCount = rolePlayerIds.filter((id) => roleContributions[id]?.commitment).length;
+  const revealCount = rolePlayerIds.filter((id) => roleContributions[id]?.secret).length;
+  const localCommitted = Boolean(playerId && roleContributions[playerId]?.commitment);
+  const localRevealed = Boolean(playerId && roleContributions[playerId]?.secret);
 
   const addEvent = useCallback((event: PublicRoomEvent) => {
     setEvents((current) => {
@@ -191,9 +265,19 @@ export function RoomClient({ roomId }: { roomId: string }) {
         return;
       }
 
+      const roleEvent = await roleProtocolEventFromEnvelope(envelope, room?.players.find((player) => player.id === envelope.senderId)?.name);
+      if (roleEvent.type === "invalid") {
+        setError(roleEvent.message);
+        return;
+      }
+
       seenHashesRef.current.add(hash);
       lastSequenceBySenderRef.current.set(envelope.senderId, envelope.sequence);
       lastHashBySenderRef.current.set(envelope.senderId, hash);
+
+      if (roleEvent.type === "commit" || roleEvent.type === "reveal") {
+        setRoleContributions((current) => mergeRoleContribution(current, roleEvent.contribution));
+      }
 
       if (relay !== "stored") {
         await appendRoomEnvelope({
@@ -208,7 +292,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
       addEvent(publicEventFromEnvelope(envelope, relay, hash, verified));
       setError(null);
     },
-    [addEvent, normalizedRoomId, requestReplay, signingKeysByPlayer],
+    [addEvent, normalizedRoomId, requestReplay, room?.players, signingKeysByPlayer],
   );
 
   const handleRelayMessage = useCallback(
@@ -349,6 +433,24 @@ export function RoomClient({ roomId }: { roomId: string }) {
   }, []);
 
   useEffect(() => {
+    if (!identity) {
+      return;
+    }
+
+    void loadOrCreateRoleSeed(normalizedRoomId, identity.playerId)
+      .then((seed) => {
+        queueMicrotask(() => {
+          setRoleSeed(seed);
+        });
+      })
+      .catch(() => {
+        queueMicrotask(() => {
+          setError("Could not create local role seed.");
+        });
+      });
+  }, [identity, normalizedRoomId]);
+
+  useEffect(() => {
     if (playerId && identity) {
       queueMicrotask(() => {
         connectRef.current();
@@ -403,7 +505,152 @@ export function RoomClient({ roomId }: { roomId: string }) {
       });
   }, [acceptEnvelope, identity, normalizedRoomId, room]);
 
+  async function runRoleWorker({
+    roomId: workerRoomId,
+    playerId: workerPlayerId,
+    players,
+    genesisHash,
+    reveals,
+  }: {
+    roomId: string;
+    playerId: string;
+    players: RoleProtocolPlayer[];
+    genesisHash: string;
+    reveals: RoleSeedReveal[];
+  }) {
+    try {
+      const seed = await combineRoleSeed(workerRoomId, genesisHash, reveals);
+      const worker = new Worker(new URL("../../../workers/role-mpc.worker.ts", import.meta.url), {
+        type: "module",
+      });
+      roleWorkerRef.current?.terminate();
+      roleWorkerRef.current = worker;
+
+      const timeout = setTimeout(() => {
+        worker.terminate();
+        roleWorkerRef.current = null;
+        setRoleStatus("error");
+        setRoleWorkerNote("Role worker timed out");
+      }, 8_000);
+
+      worker.addEventListener("message", (event: MessageEvent<RoleWorkerEvent>) => {
+        clearTimeout(timeout);
+        worker.terminate();
+        roleWorkerRef.current = null;
+
+        if (event.data.type === "assigned") {
+          setRoleView(event.data.view);
+          setRoleStatus("ready");
+          setRoleWorkerNote(
+            `${event.data.jiffAvailable ? "JIFF loaded" : "JIFF unavailable"} · ${Math.round(event.data.elapsedMs)}ms`,
+          );
+          return;
+        }
+
+        setRoleStatus("error");
+        setRoleWorkerNote(event.data.message);
+      });
+
+      worker.postMessage({
+        type: "assign",
+        roomId: workerRoomId,
+        playerId: workerPlayerId,
+        players,
+        seed,
+      });
+    } catch (workerError) {
+      setRoleStatus("error");
+      setRoleWorkerNote(workerError instanceof Error ? workerError.message : "Role protocol failed");
+    }
+  }
+
+  useEffect(() => {
+    if (!identity || roleView || roleWorkerRef.current || !genesis.hash || rolePlayerIds.length < 5) {
+      return;
+    }
+
+    const reveals = rolePlayerIds
+      .map((id) => roleContributions[id])
+      .filter((contribution): contribution is Required<Pick<RoleContribution, "playerId" | "commitment" | "secret">> & RoleContribution =>
+        Boolean(contribution?.commitment && contribution.secret),
+      )
+      .map((contribution) => ({
+        playerId: contribution.playerId,
+        commitment: contribution.commitment,
+        secret: contribution.secret,
+      }));
+
+    if (reveals.length !== rolePlayerIds.length) {
+      return;
+    }
+
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) {
+        return;
+      }
+
+      setRoleStatus("assigning");
+      setRoleWorkerNote("Combining revealed seeds in worker");
+      void runRoleWorker({
+        roomId: normalizedRoomId,
+        playerId: identity.playerId,
+        players: rolePlayers,
+        genesisHash: genesis.hash,
+        reveals,
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [genesis.hash, identity, normalizedRoomId, roleContributions, rolePlayerIds, rolePlayers, roleView]);
+
   async function sendPublicEvent() {
+    const text = draft.trim().slice(0, 120);
+    if (!text) {
+      return;
+    }
+
+    await sendSignedPayload("room.public_event", {
+      type: "room.public_event",
+      text,
+      name: playerName,
+      sentAt: currentTimestamp(),
+    });
+    setDraft("Ready at the table");
+  }
+
+  async function sendRoleCommit() {
+    if (!roleSeed) {
+      setError("Local role seed is not ready yet.");
+      return;
+    }
+
+    await sendSignedPayload("role.seed.commit", {
+      type: "role.seed.commit",
+      commitment: roleSeed.commitment,
+      name: playerName,
+      sentAt: currentTimestamp(),
+    });
+  }
+
+  async function sendRoleReveal() {
+    if (!roleSeed) {
+      setError("Local role seed is not ready yet.");
+      return;
+    }
+
+    await sendSignedPayload("role.seed.reveal", {
+      type: "role.seed.reveal",
+      commitment: roleSeed.commitment,
+      secret: roleSeed.secret,
+      name: playerName,
+      sentAt: currentTimestamp(),
+    });
+  }
+
+  async function sendSignedPayload(messageType: string, payload: Record<string, string | number>) {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       setError("Socket is not connected yet.");
@@ -415,11 +662,6 @@ export function RoomClient({ roomId }: { roomId: string }) {
       return;
     }
 
-    const text = draft.trim().slice(0, 120);
-    if (!text) {
-      return;
-    }
-
     const sequence = (lastSequenceBySenderRef.current.get(playerId) ?? 0) + 1;
     const previousHash = lastHashBySenderRef.current.get(playerId) ?? "genesis";
     const envelope = await createSignedEnvelope({
@@ -428,17 +670,12 @@ export function RoomClient({ roomId }: { roomId: string }) {
       recipients: "broadcast",
       sequence,
       previousHash,
-      messageType: "room.public_event",
-      ciphertext: jsonToBase64Url({
-        text,
-        name: playerName,
-        sentAt: Date.now(),
-      }),
+      messageType,
+      ciphertext: jsonToBase64Url(payload),
       identity,
     });
 
     socket.send(JSON.stringify({ type: "envelope", envelope }));
-    setDraft("Ready at the table");
   }
 
   function lockCurrentRoom() {
@@ -455,6 +692,27 @@ export function RoomClient({ roomId }: { roomId: string }) {
     manualDisconnectRef.current = false;
     connect();
   }
+
+  const rolePhase =
+    roleView
+      ? "ready"
+      : roleStatus === "assigning" || roleStatus === "error"
+        ? roleStatus
+        : !genesis.ready
+          ? "waiting"
+          : commitCount < rolePlayerIds.length
+            ? "commit"
+            : revealCount < rolePlayerIds.length
+              ? "reveal"
+              : "assigning";
+  const canCommit = socketState === "open" && genesis.ready && Boolean(roleSeed) && !localCommitted;
+  const canReveal =
+    socketState === "open" &&
+    genesis.ready &&
+    Boolean(roleSeed) &&
+    localCommitted &&
+    !localRevealed &&
+    commitCount === rolePlayerIds.length;
 
   return (
     <main className="room-app">
@@ -528,6 +786,51 @@ export function RoomClient({ roomId }: { roomId: string }) {
           </div>
         </section>
 
+        <section className="room-panel role-protocol-panel">
+          <div className="room-panel-heading">
+            <div>
+              <p className="prototype-kicker">Role MPC</p>
+              <h2>Private role protocol</h2>
+            </div>
+            <span className={rolePhase === "ready" ? "ready-chip" : "wait-chip"}>{rolePhase}</span>
+          </div>
+          <div className="role-progress-grid">
+            <RoomStat icon={Shield} label="Commit" value={`${commitCount}/${rolePlayerIds.length || "-"}`} />
+            <RoomStat icon={Sparkles} label="Reveal" value={`${revealCount}/${rolePlayerIds.length || "-"}`} />
+            <RoomStat icon={Activity} label="Worker" value={roleWorkerNote} />
+          </div>
+          <div className="room-actions role-actions">
+            <button type="button" onClick={sendRoleCommit} disabled={!canCommit}>
+              <Shield aria-hidden="true" size={18} />
+              <span>{localCommitted ? "Seed committed" : "Commit seed"}</span>
+            </button>
+            <button type="button" className="quiet-button" onClick={sendRoleReveal} disabled={!canReveal}>
+              <Sparkles aria-hidden="true" size={18} />
+              <span>{localRevealed ? "Seed revealed" : "Reveal seed"}</span>
+            </button>
+          </div>
+          <div className={`private-role-card ${roleVisible && roleView ? "revealed" : ""}`}>
+            <div>
+              <span>Your private role</span>
+              <strong>{roleVisible && roleView ? formatRole(roleView.self.role) : "Sealed"}</strong>
+              <p>{roleVisible && roleView ? roleView.note : "Complete commit/reveal, then reveal locally."}</p>
+            </div>
+            {roleVisible && roleView?.visiblePlayers.length ? (
+              <ul>
+                {roleView.visiblePlayers.map((player) => (
+                  <li key={player.playerId}>
+                    {player.name} · {formatRole(player.role)}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            <button type="button" onClick={() => setRoleVisible((current) => !current)} disabled={!roleView}>
+              <Eye aria-hidden="true" size={18} />
+              <span>{roleVisible ? "Hide role" : "Reveal role"}</span>
+            </button>
+          </div>
+        </section>
+
         <section className="room-panel">
           <div className="room-panel-heading">
             <div>
@@ -593,7 +896,14 @@ function publicEventFromEnvelope(
   const payload = jsonFromBase64Url(envelope.ciphertext);
   const body = isRecord(payload) ? payload : {};
   const senderName = typeof body.name === "string" ? body.name : "Player";
-  const text = typeof body.text === "string" ? body.text : envelope.messageType;
+  const text =
+    typeof body.text === "string"
+      ? body.text
+      : envelope.messageType === "role.seed.commit"
+        ? "committed a sealed role seed"
+        : envelope.messageType === "role.seed.reveal"
+          ? "revealed a role seed"
+          : envelope.messageType;
 
   return {
     id: hash,
@@ -605,6 +915,82 @@ function publicEventFromEnvelope(
     receivedAt: Date.now(),
     relay,
   };
+}
+
+async function roleProtocolEventFromEnvelope(envelope: RelayEnvelope, fallbackName?: string): Promise<RoleProtocolEvent> {
+  if (envelope.messageType !== "role.seed.commit" && envelope.messageType !== "role.seed.reveal") {
+    return { type: "none" };
+  }
+
+  const payload = jsonFromBase64Url(envelope.ciphertext);
+  if (!isRecord(payload)) {
+    return { type: "invalid", message: "Rejected unreadable role protocol event." };
+  }
+
+  const name = typeof payload.name === "string" ? payload.name : fallbackName ?? "Player";
+  const commitment = typeof payload.commitment === "string" ? payload.commitment : "";
+  if (!commitment) {
+    return { type: "invalid", message: "Rejected role event without commitment." };
+  }
+
+  if (envelope.messageType === "role.seed.commit") {
+    return {
+      type: "commit",
+      contribution: {
+        playerId: envelope.senderId,
+        name,
+        commitment,
+        committedAt: envelope.sentAt,
+      },
+    };
+  }
+
+  const secret = typeof payload.secret === "string" ? payload.secret : "";
+  if (!secret || commitment !== (await roleSeedCommitment(envelope.senderId, secret))) {
+    return { type: "invalid", message: "Rejected role reveal that does not match commitment." };
+  }
+
+  return {
+    type: "reveal",
+    contribution: {
+      playerId: envelope.senderId,
+      name,
+      commitment,
+      secret,
+      revealedAt: envelope.sentAt,
+    },
+  };
+}
+
+function mergeRoleContribution(
+  current: Record<string, RoleContribution>,
+  contribution: RoleContribution,
+): Record<string, RoleContribution> {
+  const existing = current[contribution.playerId];
+  if (existing?.commitment && contribution.commitment && existing.commitment !== contribution.commitment) {
+    return current;
+  }
+
+  return {
+    ...current,
+    [contribution.playerId]: {
+      ...existing,
+      ...contribution,
+      commitment: existing?.commitment ?? contribution.commitment,
+      committedAt: existing?.committedAt ?? contribution.committedAt,
+    },
+  };
+}
+
+function formatRole(role: string): string {
+  return role
+    .split("-")
+    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
+}
+
+function currentTimestamp(): number {
+  return Date.now();
 }
 
 function webSocketUrl(): string {

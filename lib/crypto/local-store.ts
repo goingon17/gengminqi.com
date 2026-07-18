@@ -1,9 +1,14 @@
 import {
+  bytesToBase64Url,
+  textToBytes,
+} from "@/lib/crypto/codec";
+import {
   createPlayerIdentity,
   updateIdentityName,
   type PlayerIdentity,
 } from "@/lib/crypto/player-identity";
 import type { RelayEnvelope } from "@/lib/protocol/envelope";
+import { roleSeedCommitment } from "@/lib/protocol/role-assignment";
 
 export type StoredRoomEnvelope = {
   roomId: string;
@@ -13,10 +18,20 @@ export type StoredRoomEnvelope = {
   receivedAt: number;
 };
 
+export type StoredRoleSeed = {
+  id: string;
+  roomId: string;
+  playerId: string;
+  secret: string;
+  commitment: string;
+  createdAt: number;
+};
+
 const DB_NAME = "avalon-local-protocol";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const IDENTITY_STORE = "identities";
 const EVENT_STORE = "roomEvents";
+const ROLE_SEED_STORE = "roleSeeds";
 
 export async function loadOrCreatePlayerIdentity(playerId: string, name: string): Promise<PlayerIdentity> {
   const db = await openDatabase();
@@ -53,6 +68,27 @@ export async function loadRoomEnvelopes(roomId: string): Promise<StoredRoomEnvel
   });
 }
 
+export async function loadOrCreateRoleSeed(roomId: string, playerId: string): Promise<StoredRoleSeed> {
+  const db = await openDatabase();
+  const id = roleSeedId(roomId, playerId);
+  const existing = await getFromStore<StoredRoleSeed>(db, ROLE_SEED_STORE, id);
+  if (existing) {
+    return existing;
+  }
+
+  const secret = randomSecret();
+  const seed: StoredRoleSeed = {
+    id,
+    roomId,
+    playerId,
+    secret,
+    commitment: await roleSeedCommitment(playerId, secret),
+    createdAt: Date.now(),
+  };
+  await putIntoStore(db, ROLE_SEED_STORE, seed);
+  return seed;
+}
+
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -66,11 +102,24 @@ function openDatabase(): Promise<IDBDatabase> {
         const store = db.createObjectStore(EVENT_STORE, { keyPath: "hash" });
         store.createIndex("roomId", "roomId", { unique: false });
       }
+      if (!db.objectStoreNames.contains(ROLE_SEED_STORE)) {
+        db.createObjectStore(ROLE_SEED_STORE, { keyPath: "id" });
+      }
     };
 
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
+}
+
+function randomSecret(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return bytesToBase64Url(bytes);
+}
+
+function roleSeedId(roomId: string, playerId: string): string {
+  return bytesToBase64Url(textToBytes(`${roomId}:${playerId}`));
 }
 
 function getFromStore<T>(db: IDBDatabase, storeName: string, key: string): Promise<T | null> {
