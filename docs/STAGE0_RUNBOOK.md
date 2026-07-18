@@ -19,6 +19,7 @@ This phase proves the risky parts before the real Avalon game is built.
 - `next dev` is not enough to test `/api/ws`; the local WebSocket probe receives `socket hang up`.
 - Local `vercel dev` is blocked by an invalid Vercel token on this machine.
 - Local Vercel CLI is 53.4.0 and should be upgraded before WebSocket testing.
+- The hosted spike uses `maxDuration: 60` so it can deploy on the Vercel Hobby plan. This is enough for short relay probes, but the production game will need reconnect/resume logic or a plan/runtime that permits longer socket lifetimes.
 
 ## Local validation
 

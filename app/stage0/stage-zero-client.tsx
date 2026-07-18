@@ -77,6 +77,8 @@ export function StageZeroClient() {
   const socketRef = useRef<WebSocket | null>(null);
   const sequenceRef = useRef(0);
   const previousHashRef = useRef("genesis");
+  const manualDisconnectRef = useRef(false);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [roomId, setRoomId] = useState("AVALON-0");
   const [playerName, setPlayerName] = useState("Player");
@@ -136,6 +138,10 @@ export function StageZeroClient() {
       });
 
     return () => {
+      manualDisconnectRef.current = true;
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+      }
       socketRef.current?.close();
     };
   }, [addLog]);
@@ -145,6 +151,12 @@ export function StageZeroClient() {
       return;
     }
 
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+
+    manualDisconnectRef.current = false;
     socketRef.current?.close();
     setConnectionState("connecting");
 
@@ -171,8 +183,18 @@ export function StageZeroClient() {
     });
 
     socket.addEventListener("close", () => {
+      if (socketRef.current !== socket) {
+        return;
+      }
+
       setConnectionState("closed");
-      addLog("warn", "Socket closed.");
+      if (manualDisconnectRef.current) {
+        addLog("warn", "Socket closed.");
+        return;
+      }
+
+      addLog("warn", "Socket closed by the runtime; reconnecting.");
+      reconnectTimerRef.current = setTimeout(connect, 1_200);
     });
 
     socket.addEventListener("error", () => {
@@ -182,6 +204,11 @@ export function StageZeroClient() {
   }
 
   function disconnect() {
+    manualDisconnectRef.current = true;
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
     socketRef.current?.close();
     socketRef.current = null;
     setConnectionState("closed");

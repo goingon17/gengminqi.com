@@ -1,7 +1,7 @@
 {
   "functions": {
     "app/api/ws/route.ts": {
-      "maxDuration": 800
+      "maxDuration": 60
     }
   }
 }
