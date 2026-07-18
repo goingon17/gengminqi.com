@@ -7,19 +7,23 @@ import {
   Circle,
   Copy,
   Eye,
+  Flag,
   Lock,
   Radio,
   RefreshCcw,
   Send,
   Shield,
   Sparkles,
+  Swords,
   Users,
+  Vote,
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { jsonFromBase64Url, jsonToBase64Url } from "@/lib/crypto/codec";
 import {
   appendRoomEnvelope,
+  clearRoomSecrets,
   loadOrCreateRoleSeed,
   loadOrCreatePlayerIdentity,
   loadRoomEnvelopes,
@@ -44,10 +48,23 @@ import {
 import {
   combineRoleSeed,
   roleSeedCommitment,
+  type RoleAssignment,
   type RolePrivateView,
   type RoleProtocolPlayer,
   type RoleSeedReveal,
 } from "@/lib/protocol/role-assignment";
+import {
+  activeVoteKey,
+  deriveGameProtocolSnapshot,
+  gameProtocolPayloadFromEnvelope,
+  gameVoteCommitment,
+  gameVoteScope,
+  randomVoteSalt,
+  type GameProtocolPayload,
+  type MissionVoteChoice,
+  type TeamVoteChoice,
+} from "@/lib/protocol/game-protocol";
+import { currentLeader, currentQuest, type GameState } from "@/lib/game";
 import type { PublicRoom } from "@/lib/relay/rooms";
 
 type SocketState = "idle" | "joining" | "open" | "closed" | "error";
@@ -125,6 +142,7 @@ type RoleWorkerEvent =
       elapsedMs: number;
       jiffAvailable: boolean;
       view: RolePrivateView;
+      assignments: RoleAssignment[];
     }
   | {
       type: "error";
@@ -143,6 +161,12 @@ type RoleProtocolEvent =
       type: "commit" | "reveal";
       contribution: RoleContribution;
     };
+
+type LocalVoteDraft = {
+  choice: TeamVoteChoice | MissionVoteChoice;
+  salt: string;
+  commitment: string;
+};
 
 const HEARTBEAT_MS = 12_000;
 
@@ -170,8 +194,14 @@ export function RoomClient({ roomId }: { roomId: string }) {
   const [roleContributions, setRoleContributions] = useState<Record<string, RoleContribution>>({});
   const [roleStatus, setRoleStatus] = useState<RoleProtocolStatus>("waiting");
   const [roleView, setRoleView] = useState<RolePrivateView | null>(null);
+  const [roleAssignments, setRoleAssignments] = useState<RoleAssignment[]>([]);
   const [roleVisible, setRoleVisible] = useState(false);
   const [roleWorkerNote, setRoleWorkerNote] = useState("Worker idle");
+  const [gamePayloads, setGamePayloads] = useState<GameProtocolPayload[]>([]);
+  const [selectedTeam, setSelectedTeam] = useState<string[]>([]);
+  const [voteDrafts, setVoteDrafts] = useState<Record<string, LocalVoteDraft>>({});
+  const [assassinationTarget, setAssassinationTarget] = useState("");
+  const [secretsCleared, setSecretsCleared] = useState(false);
   const [genesis, setGenesis] = useState<GenesisSummary>({
     ready: false,
     hash: "",
@@ -211,6 +241,14 @@ export function RoomClient({ roomId }: { roomId: string }) {
   const revealCount = rolePlayerIds.filter((id) => roleContributions[id]?.secret).length;
   const localCommitted = Boolean(playerId && roleContributions[playerId]?.commitment);
   const localRevealed = Boolean(playerId && roleContributions[playerId]?.secret);
+  const gameSnapshot = useMemo(() => deriveGameProtocolSnapshot(rolePlayers, gamePayloads), [gamePayloads, rolePlayers]);
+  const gameState = gameSnapshot.state;
+  const gameQuest = gameState && gameState.phase !== "ended" ? currentQuest(gameState) : null;
+  const gameLeader = gameState && gameState.phase !== "ended" ? currentLeader(gameState) : null;
+  const activeGameKey = gameState ? activeVoteKey(gameState) : "";
+  const localTeamVote = activeGameKey ? voteDrafts[`team:${activeGameKey}`] : undefined;
+  const localMissionVote = activeGameKey ? voteDrafts[`mission:${activeGameKey}`] : undefined;
+  const proposedTeam = gameState?.activeProposal?.team ?? [];
 
   const addEvent = useCallback((event: PublicRoomEvent) => {
     setEvents((current) => {
@@ -271,12 +309,21 @@ export function RoomClient({ roomId }: { roomId: string }) {
         return;
       }
 
+      const gameEvent = await gameProtocolPayloadFromEnvelope(envelope);
+      if (gameEvent.type === "invalid") {
+        setError(gameEvent.message);
+        return;
+      }
+
       seenHashesRef.current.add(hash);
       lastSequenceBySenderRef.current.set(envelope.senderId, envelope.sequence);
       lastHashBySenderRef.current.set(envelope.senderId, hash);
 
       if (roleEvent.type === "commit" || roleEvent.type === "reveal") {
         setRoleContributions((current) => mergeRoleContribution(current, roleEvent.contribution));
+      }
+      if (gameEvent.type === "payload") {
+        setGamePayloads((current) => (current.some((payload) => sameGamePayload(payload, gameEvent.payload)) ? current : [...current, gameEvent.payload]));
       }
 
       if (relay !== "stored") {
@@ -540,6 +587,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
 
         if (event.data.type === "assigned") {
           setRoleView(event.data.view);
+          setRoleAssignments(event.data.assignments);
           setRoleStatus("ready");
           setRoleWorkerNote(
             `${event.data.jiffAvailable ? "JIFF loaded" : "JIFF unavailable"} · ${Math.round(event.data.elapsedMs)}ms`,
@@ -650,7 +698,123 @@ export function RoomClient({ roomId }: { roomId: string }) {
     });
   }
 
-  async function sendSignedPayload(messageType: string, payload: Record<string, string | number>) {
+  async function sendTeamProposal() {
+    if (!gameState || !gameQuest || selectedTeam.length !== gameQuest.teamSize) {
+      setError("Select the exact quest team before proposing.");
+      return;
+    }
+
+    await sendSignedPayload("game.team.proposed", {
+      type: "game.team.proposed",
+      team: selectedTeam,
+      sentAt: currentTimestamp(),
+    });
+  }
+
+  async function sendTeamVoteCommit(choice: TeamVoteChoice) {
+    if (!gameState) {
+      return;
+    }
+
+    const scope = gameVoteScope("team", gameState.questIndex, gameState.activeProposal?.attempt ?? 1);
+    const salt = randomVoteSalt();
+    const commitment = await gameVoteCommitment(playerId, scope, choice, salt);
+    setVoteDrafts((current) => ({
+      ...current,
+      [`team:${activeVoteKey(gameState)}`]: { choice, salt, commitment },
+    }));
+    await sendSignedPayload("game.team_vote.commit", {
+      type: "game.team_vote.commit",
+      questIndex: gameState.questIndex,
+      attempt: gameState.activeProposal?.attempt ?? 1,
+      commitment,
+      sentAt: currentTimestamp(),
+    });
+  }
+
+  async function sendTeamVoteReveal() {
+    if (!gameState || !localTeamVote) {
+      setError("Commit a team vote before revealing.");
+      return;
+    }
+
+    await sendSignedPayload("game.team_vote.reveal", {
+      type: "game.team_vote.reveal",
+      questIndex: gameState.questIndex,
+      attempt: gameState.activeProposal?.attempt ?? 1,
+      choice: localTeamVote.choice,
+      salt: localTeamVote.salt,
+      commitment: localTeamVote.commitment,
+      sentAt: currentTimestamp(),
+    });
+  }
+
+  async function sendMissionVoteCommit(choice: MissionVoteChoice) {
+    if (!gameState?.activeProposal?.approved) {
+      return;
+    }
+
+    const safeChoice: MissionVoteChoice = roleView?.self.alignment === "evil" ? choice : "success";
+    const scope = gameVoteScope("mission", gameState.questIndex, gameState.activeProposal.attempt);
+    const salt = randomVoteSalt();
+    const commitment = await gameVoteCommitment(playerId, scope, safeChoice, salt);
+    setVoteDrafts((current) => ({
+      ...current,
+      [`mission:${activeVoteKey(gameState)}`]: { choice: safeChoice, salt, commitment },
+    }));
+    await sendSignedPayload("game.mission_vote.commit", {
+      type: "game.mission_vote.commit",
+      questIndex: gameState.questIndex,
+      attempt: gameState.activeProposal.attempt,
+      commitment,
+      sentAt: currentTimestamp(),
+    });
+  }
+
+  async function sendMissionVoteReveal() {
+    if (!gameState?.activeProposal?.approved || !localMissionVote) {
+      setError("Commit a mission vote before revealing.");
+      return;
+    }
+
+    await sendSignedPayload("game.mission_vote.reveal", {
+      type: "game.mission_vote.reveal",
+      questIndex: gameState.questIndex,
+      attempt: gameState.activeProposal.attempt,
+      choice: localMissionVote.choice,
+      salt: localMissionVote.salt,
+      commitment: localMissionVote.commitment,
+      sentAt: currentTimestamp(),
+    });
+  }
+
+  async function sendAssassination() {
+    if (!assassinationTarget) {
+      setError("Choose an assassination target.");
+      return;
+    }
+
+    const target = roleAssignments.find((assignment) => assignment.playerId === assassinationTarget);
+    await sendSignedPayload("game.assassination.resolved", {
+      type: "game.assassination.resolved",
+      targetId: assassinationTarget,
+      hitMerlin: target?.role === "merlin",
+      sentAt: currentTimestamp(),
+    });
+  }
+
+  async function clearLocalSecrets() {
+    if (!identity) {
+      return;
+    }
+
+    await clearRoomSecrets(normalizedRoomId, identity.playerId);
+    setRoleSeed(null);
+    setVoteDrafts({});
+    setSecretsCleared(true);
+  }
+
+  async function sendSignedPayload(messageType: string, payload: Record<string, string | number | boolean | string[]>) {
     const socket = socketRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       setError("Socket is not connected yet.");
@@ -693,6 +857,18 @@ export function RoomClient({ roomId }: { roomId: string }) {
     connect();
   }
 
+  function toggleTeamSelection(candidateId: string, teamSize: number) {
+    setSelectedTeam((current) => {
+      if (current.includes(candidateId)) {
+        return current.filter((id) => id !== candidateId);
+      }
+      if (current.length >= teamSize) {
+        return [...current.slice(1), candidateId];
+      }
+      return [...current, candidateId];
+    });
+  }
+
   const rolePhase =
     roleView
       ? "ready"
@@ -713,6 +889,23 @@ export function RoomClient({ roomId }: { roomId: string }) {
     localCommitted &&
     !localRevealed &&
     commitCount === rolePlayerIds.length;
+  const isCurrentLeader = Boolean(gameLeader && gameLeader.id === playerId);
+  const isMissionMember = Boolean(gameState?.activeProposal?.team.includes(playerId));
+  const isAssassin = roleView?.self.role === "assassin";
+  const canProposeTeam =
+    socketState === "open" &&
+    rolePhase === "ready" &&
+    gameState?.phase === "proposal" &&
+    isCurrentLeader &&
+    selectedTeam.length === (gameQuest?.teamSize ?? 0);
+  const canCommitTeamVote = socketState === "open" && gameState?.phase === "teamVote" && !localTeamVote;
+  const canRevealTeamVote = socketState === "open" && gameState?.phase === "teamVote" && Boolean(localTeamVote);
+  const canCommitMissionVote =
+    socketState === "open" && gameState?.phase === "missionVote" && isMissionMember && !localMissionVote;
+  const canRevealMissionVote =
+    socketState === "open" && gameState?.phase === "missionVote" && isMissionMember && Boolean(localMissionVote);
+  const canAssassinate =
+    socketState === "open" && gameState?.phase === "assassination" && isAssassin && Boolean(assassinationTarget);
 
   return (
     <main className="room-app">
@@ -831,6 +1024,171 @@ export function RoomClient({ roomId }: { roomId: string }) {
           </div>
         </section>
 
+        <section className="room-panel game-protocol-panel">
+          <div className="room-panel-heading">
+            <div>
+              <p className="prototype-kicker">Game protocol</p>
+              <h2>{gameState ? formatPhase(gameState.phase) : "Waiting for five players"}</h2>
+            </div>
+            <span className={gameState?.phase === "ended" ? "ready-chip" : "wait-chip"}>
+              {gameLeader ? `Leader ${gameLeader.name}` : "Setup"}
+            </span>
+          </div>
+
+          {gameState ? (
+            <>
+              <div className="quest-summary-grid">
+                {gameState.quests.map((quest) => (
+                  <div key={quest.index} className={`quest-summary ${quest.status}`}>
+                    <strong>{quest.index + 1}</strong>
+                    <span>{quest.teamSize} seats</span>
+                    <small>{quest.failCount === undefined ? `${quest.failThreshold} fail` : `${quest.failCount} fail`}</small>
+                  </div>
+                ))}
+              </div>
+
+              {gameState.phase === "proposal" ? (
+                <div className="protocol-block">
+                  <div>
+                    <span>Quest {gameState.questIndex + 1}</span>
+                    <strong>Select {gameQuest?.teamSize ?? 0} players</strong>
+                    <p>{isCurrentLeader ? "You are the leader." : "Waiting for the leader to propose."}</p>
+                  </div>
+                  <div className="team-picker">
+                    {rolePlayers.map((player) => {
+                      const selected = selectedTeam.includes(player.id);
+                      return (
+                        <button
+                          key={player.id}
+                          type="button"
+                          className={selected ? "selected" : ""}
+                          onClick={() => toggleTeamSelection(player.id, gameQuest?.teamSize ?? 0)}
+                          disabled={!isCurrentLeader}
+                        >
+                          <span>{player.name}</span>
+                          <small>Seat {player.seat}</small>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button type="button" onClick={sendTeamProposal} disabled={!canProposeTeam}>
+                    <Swords aria-hidden="true" size={18} />
+                    <span>Propose team</span>
+                  </button>
+                </div>
+              ) : null}
+
+              {gameState.phase === "teamVote" ? (
+                <div className="protocol-block">
+                  <div>
+                    <span>Team vote</span>
+                    <strong>{proposedTeam.map((id) => playerNameById(rolePlayers, id)).join(" · ")}</strong>
+                    <p>
+                      Commit {gameSnapshot.pending.teamVote?.commits ?? 0}/{gameSnapshot.pending.teamVote?.required ?? 0} · Reveal{" "}
+                      {gameSnapshot.pending.teamVote?.reveals ?? 0}/{gameSnapshot.pending.teamVote?.required ?? 0}
+                    </p>
+                  </div>
+                  <div className="role-actions">
+                    <button type="button" onClick={() => void sendTeamVoteCommit("approve")} disabled={!canCommitTeamVote}>
+                      <Vote aria-hidden="true" size={18} />
+                      <span>Commit approve</span>
+                    </button>
+                    <button type="button" className="danger-command" onClick={() => void sendTeamVoteCommit("reject")} disabled={!canCommitTeamVote}>
+                      <Vote aria-hidden="true" size={18} />
+                      <span>Commit reject</span>
+                    </button>
+                  </div>
+                  <button type="button" className="quiet-button" onClick={sendTeamVoteReveal} disabled={!canRevealTeamVote}>
+                    <Eye aria-hidden="true" size={18} />
+                    <span>Reveal team vote</span>
+                  </button>
+                </div>
+              ) : null}
+
+              {gameState.phase === "missionVote" ? (
+                <div className="protocol-block">
+                  <div>
+                    <span>Mission vote</span>
+                    <strong>{proposedTeam.map((id) => playerNameById(rolePlayers, id)).join(" · ")}</strong>
+                    <p>
+                      Commit {gameSnapshot.pending.missionVote?.commits ?? 0}/{gameSnapshot.pending.missionVote?.required ?? 0} · Reveal{" "}
+                      {gameSnapshot.pending.missionVote?.reveals ?? 0}/{gameSnapshot.pending.missionVote?.required ?? 0}
+                    </p>
+                  </div>
+                  <div className="role-actions">
+                    <button type="button" onClick={() => void sendMissionVoteCommit("success")} disabled={!canCommitMissionVote}>
+                      <Flag aria-hidden="true" size={18} />
+                      <span>Commit success</span>
+                    </button>
+                    <button type="button" className="danger-command" onClick={() => void sendMissionVoteCommit("fail")} disabled={!canCommitMissionVote || roleView?.self.alignment !== "evil"}>
+                      <Flag aria-hidden="true" size={18} />
+                      <span>Commit fail</span>
+                    </button>
+                  </div>
+                  <button type="button" className="quiet-button" onClick={sendMissionVoteReveal} disabled={!canRevealMissionVote}>
+                    <Eye aria-hidden="true" size={18} />
+                    <span>Reveal mission vote</span>
+                  </button>
+                </div>
+              ) : null}
+
+              {gameState.phase === "assassination" ? (
+                <div className="protocol-block">
+                  <div>
+                    <span>Assassination</span>
+                    <strong>{isAssassin ? "Choose Merlin" : "Waiting for Assassin"}</strong>
+                    <p>Good completed three quests. The assassin gets one shot.</p>
+                  </div>
+                  <div className="team-picker">
+                    {rolePlayers.map((player) => (
+                      <button
+                        key={player.id}
+                        type="button"
+                        className={assassinationTarget === player.id ? "selected" : ""}
+                        onClick={() => setAssassinationTarget(player.id)}
+                        disabled={!isAssassin}
+                      >
+                        <span>{player.name}</span>
+                        <small>Seat {player.seat}</small>
+                      </button>
+                    ))}
+                  </div>
+                  <button type="button" className="danger-command" onClick={sendAssassination} disabled={!canAssassinate}>
+                    <Eye aria-hidden="true" size={18} />
+                    <span>Resolve assassination</span>
+                  </button>
+                </div>
+              ) : null}
+
+              {gameState.phase === "ended" ? (
+                <div className="protocol-block">
+                  <div>
+                    <span>Game ended</span>
+                    <strong>{gameState.winner === "good" ? "Good wins" : "Evil wins"}</strong>
+                    <p>{gameState.victoryReason}</p>
+                  </div>
+                  <div className="end-role-grid">
+                    {roleAssignments.map((assignment) => (
+                      <article key={assignment.playerId}>
+                        <strong>{assignment.name}</strong>
+                        <span>{formatRole(assignment.role)}</span>
+                      </article>
+                    ))}
+                  </div>
+                  <button type="button" className="quiet-button" onClick={clearLocalSecrets} disabled={secretsCleared}>
+                    <Lock aria-hidden="true" size={18} />
+                    <span>{secretsCleared ? "Local secrets cleared" : "Clear local secrets"}</span>
+                  </button>
+                </div>
+              ) : null}
+
+              {gameSnapshot.errors.length ? <p className="prototype-error compact">{gameSnapshot.errors[0]}</p> : null}
+            </>
+          ) : (
+            <p className="empty-protocol-copy">Need five keyed players and a completed role protocol before the public game can start.</p>
+          )}
+        </section>
+
         <section className="room-panel">
           <div className="room-panel-heading">
             <div>
@@ -901,9 +1259,21 @@ function publicEventFromEnvelope(
       ? body.text
       : envelope.messageType === "role.seed.commit"
         ? "committed a sealed role seed"
-        : envelope.messageType === "role.seed.reveal"
+      : envelope.messageType === "role.seed.reveal"
           ? "revealed a role seed"
-          : envelope.messageType;
+          : envelope.messageType === "game.team.proposed"
+            ? "proposed a quest team"
+            : envelope.messageType === "game.team_vote.commit"
+              ? "committed a team vote"
+              : envelope.messageType === "game.team_vote.reveal"
+                ? "revealed a team vote"
+                : envelope.messageType === "game.mission_vote.commit"
+                  ? "committed a mission vote"
+                  : envelope.messageType === "game.mission_vote.reveal"
+                    ? "revealed a mission vote"
+                    : envelope.messageType === "game.assassination.resolved"
+                      ? "resolved assassination"
+                      : envelope.messageType;
 
   return {
     id: hash,
@@ -982,11 +1352,46 @@ function mergeRoleContribution(
   };
 }
 
+function sameGamePayload(left: GameProtocolPayload, right: GameProtocolPayload): boolean {
+  if (left.type !== right.type || left.sentAt !== right.sentAt) {
+    return false;
+  }
+
+  if (left.type === "game.team.proposed" && right.type === "game.team.proposed") {
+    return left.proposerId === right.proposerId;
+  }
+
+  if (left.type === "game.assassination.resolved" && right.type === "game.assassination.resolved") {
+    return left.assassinId === right.assassinId && left.targetId === right.targetId;
+  }
+
+  if ("voterId" in left && "voterId" in right) {
+    return left.voterId === right.voterId && left.questIndex === right.questIndex && left.attempt === right.attempt;
+  }
+
+  return false;
+}
+
 function formatRole(role: string): string {
   return role
     .split("-")
     .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
     .join(" ");
+}
+
+function formatPhase(phase: GameState["phase"]): string {
+  const labels: Record<GameState["phase"], string> = {
+    proposal: "Team proposal",
+    teamVote: "Team vote",
+    missionVote: "Mission vote",
+    assassination: "Assassination",
+    ended: "Game ended",
+  };
+  return labels[phase];
+}
+
+function playerNameById(players: RoleProtocolPlayer[], playerId: string): string {
+  return players.find((player) => player.id === playerId)?.name ?? playerId.slice(0, 8);
 }
 
 function currentTimestamp(): number {

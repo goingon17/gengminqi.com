@@ -89,6 +89,12 @@ export async function loadOrCreateRoleSeed(roomId: string, playerId: string): Pr
   return seed;
 }
 
+export async function clearRoomSecrets(roomId: string, playerId: string): Promise<void> {
+  const db = await openDatabase();
+  await deleteFromStore(db, ROLE_SEED_STORE, roleSeedId(roomId, playerId));
+  await deleteRoomEvents(db, roomId);
+}
+
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -136,6 +142,34 @@ function putIntoStore(db: IDBDatabase, storeName: string, value: unknown): Promi
     const tx = db.transaction(storeName, "readwrite");
     const request = tx.objectStore(storeName).put(value);
     request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function deleteFromStore(db: IDBDatabase, storeName: string, key: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, "readwrite");
+    const request = tx.objectStore(storeName).delete(key);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function deleteRoomEvents(db: IDBDatabase, roomId: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(EVENT_STORE, "readwrite");
+    const index = tx.objectStore(EVENT_STORE).index("roomId");
+    const request = index.openCursor(roomId);
+
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) {
+        resolve();
+        return;
+      }
+      cursor.delete();
+      cursor.continue();
+    };
     request.onerror = () => reject(request.error);
   });
 }

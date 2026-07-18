@@ -934,6 +934,127 @@ body {
   list-style: none;
 }
 
+.game-protocol-panel {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.quest-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.quest-summary {
+  min-height: 86px;
+  display: grid;
+  align-content: center;
+  gap: 4px;
+  border: 1px solid rgba(245, 239, 226, 0.1);
+  border-radius: var(--radius-sm);
+  background: rgba(13, 15, 18, 0.42);
+  padding: var(--space-2);
+  text-align: center;
+}
+
+.quest-summary.success {
+  border-color: rgba(79, 123, 94, 0.66);
+  background: rgba(79, 123, 94, 0.16);
+}
+
+.quest-summary.failure {
+  border-color: rgba(156, 48, 48, 0.66);
+  background: rgba(156, 48, 48, 0.16);
+}
+
+.quest-summary strong {
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+}
+
+.quest-summary span,
+.quest-summary small {
+  color: var(--paper-dim);
+  font-size: 0.72rem;
+}
+
+.protocol-block {
+  display: grid;
+  gap: var(--space-3);
+  border: 1px solid rgba(245, 239, 226, 0.12);
+  border-radius: var(--radius-md);
+  background: rgba(13, 15, 18, 0.44);
+  padding: var(--space-4);
+}
+
+.protocol-block span {
+  color: var(--gold-soft);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.protocol-block strong {
+  display: block;
+  margin-top: 4px;
+  font-size: clamp(1.2rem, 2vw, 1.55rem);
+}
+
+.protocol-block p {
+  margin: var(--space-2) 0 0;
+  color: var(--paper-dim);
+}
+
+.team-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: var(--space-2);
+}
+
+.team-picker button {
+  min-height: 58px;
+  display: grid;
+  justify-items: start;
+  gap: 2px;
+  border-color: rgba(245, 239, 226, 0.12);
+  background: rgba(245, 239, 226, 0.045);
+  text-align: left;
+}
+
+.team-picker button.selected {
+  border-color: rgba(234, 211, 154, 0.54);
+  background: rgba(196, 163, 90, 0.16);
+}
+
+.team-picker small {
+  color: var(--paper-dim);
+}
+
+.end-role-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-2);
+}
+
+.end-role-grid article {
+  display: grid;
+  gap: 4px;
+  border: 1px solid rgba(245, 239, 226, 0.12);
+  border-radius: var(--radius-sm);
+  background: rgba(245, 239, 226, 0.045);
+  padding: var(--space-3);
+}
+
+.end-role-grid span {
+  color: var(--paper-dim);
+  text-transform: none;
+}
+
+.empty-protocol-copy {
+  margin: 0;
+  color: var(--paper-dim);
+}
+
 .relay-event-list {
   display: grid;
   gap: var(--space-2);
@@ -1454,7 +1575,8 @@ h2 {
 
   .role-progress-grid,
   .role-actions,
-  .private-role-card {
+  .private-role-card,
+  .quest-summary-grid {
     grid-template-columns: 1fr;
   }
 

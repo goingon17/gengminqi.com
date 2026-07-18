@@ -3,6 +3,7 @@
 import {
   buildRoleDeal,
   privateViewForPlayer,
+  type RoleAssignment,
   type RolePrivateView,
   type RoleProtocolPlayer,
 } from "@/lib/protocol/role-assignment";
@@ -22,6 +23,7 @@ type RoleWorkerResponse =
       elapsedMs: number;
       jiffAvailable: boolean;
       view: RolePrivateView;
+      assignments: RoleAssignment[];
     }
   | {
       type: "error";
@@ -61,6 +63,7 @@ async function assignRoles(request: RoleWorkerRequest): Promise<RoleWorkerRespon
     elapsedMs: performance.now() - start,
     jiffAvailable,
     view,
+    assignments: deal.assignments,
   };
 }
 
