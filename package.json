@@ -1,40 +1,37 @@
 {
-  "name": "postgres-starter",
-  "repository": "https://github.com/vercel/examples.git",
-  "license": "MIT",
+  "name": "avalon-local-protocol",
   "version": "0.0.0",
   "private": true,
+  "packageManager": "pnpm@11.1.0",
   "scripts": {
     "dev": "next dev",
+    "dev:vercel": "vercel dev",
     "build": "next build",
-    "start": "next start",
-    "lint": "next lint"
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "stage0:node": "node scripts/stage0-node-smoke.mjs",
+    "postinstall": "node scripts/prepare-jiff.mjs"
   },
   "dependencies": {
-    "@types/node": "20.8.3",
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
-    "autoprefixer": "10.4.16",
-    "eslint": "^8",
-    "eslint-config-next": "^15.1.6",
-    "framer-motion": "^12.38.0",
-    "lucide-react": "^1.14.0",
-    "next": "^16.0.10",
-    "postcss": "8.4.31",
-    "postgres": "^3.4.5",
-    "react": "^19.2.1",
-    "react-dom": "^19.2.1",
-    "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1",
-    "tailwindcss": "3.3.3",
-    "typescript": "^5"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "sharp"
-    ]
+    "@vercel/functions": "latest",
+    "ioredis": "^5.7.0",
+    "jiff-mpc": "latest",
+    "lucide-react": "^0.468.0",
+    "next": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@tailwindcss/typography": "^0.5.19"
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@types/ws": "^8.5.13",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^9.39.1",
+    "eslint-config-next": "latest",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.9.3"
   }
 }

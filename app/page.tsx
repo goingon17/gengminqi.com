@@ -1,14 +1,5 @@
-import { getCards } from '@/lib/actions'
-import AppShell from '@/components/app-shell'
+import { StageZeroClient } from "./stage0/stage-zero-client";
 
-export const dynamic = 'force-dynamic'
-
-export default async function Home() {
-  const cards = await getCards()
-
-  return (
-    <main className="mx-auto w-full max-w-6xl">
-      <AppShell cards={cards} />
-    </main>
-  )
+export default function Home() {
+  return <StageZeroClient />;
 }
