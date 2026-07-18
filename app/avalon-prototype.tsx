@@ -26,7 +26,6 @@ type PrototypeSurface = "entry" | "lobby" | "role" | "quest";
 type Player = {
   name: string;
   seat: number;
-  ready: boolean;
   side: "loyal" | "shadow";
 };
 
@@ -42,11 +41,11 @@ const surfaces: Array<{
 ];
 
 const players: Player[] = [
-  { name: "Mira", seat: 1, ready: true, side: "loyal" },
-  { name: "Rowan", seat: 2, ready: true, side: "shadow" },
-  { name: "Noah", seat: 3, ready: true, side: "loyal" },
-  { name: "Iris", seat: 4, ready: false, side: "loyal" },
-  { name: "Vale", seat: 5, ready: true, side: "shadow" },
+  { name: "Mira", seat: 1, side: "loyal" },
+  { name: "Rowan", seat: 2, side: "shadow" },
+  { name: "Noah", seat: 3, side: "loyal" },
+  { name: "Iris", seat: 4, side: "loyal" },
+  { name: "Vale", seat: 5, side: "shadow" },
 ];
 
 const questTrack = [
@@ -217,10 +216,10 @@ export function AvalonPrototype() {
             />
           </div>
           <aside className="control-rail" aria-label="Table state">
-            <RailItem icon={Lock} label="The Oath" value="5 seals" />
-            <RailItem icon={Shield} label="Courier" value="Relay ready" />
-            <RailItem icon={Vote} label="Ballot" value="Votes veiled" />
-            <RailItem icon={Crown} label="Crown" value="Mira" />
+            <RailItem icon={Lock} label="The Oath" value="No seals" />
+            <RailItem icon={Shield} label="Courier" value="Standing by" />
+            <RailItem icon={Vote} label="Ballot" value="No council" />
+            <RailItem icon={Crown} label="Crown" value="Unclaimed" />
           </aside>
         </div>
       </section>
@@ -325,28 +324,15 @@ function EntryScreen({
 function LobbyScreen() {
   return (
     <section className="mobile-screen lobby-screen">
-      <ScreenHeader eyebrow="The second leaf" title="Five at the gate" action="Seal" />
-      <div className="checksum-bar">
-        <span>ash</span>
-        <span>crown</span>
-        <span>river</span>
+      <ScreenHeader eyebrow="The second leaf" title="The council awaits" action="0 / 5" />
+      <div className="prototype-empty-state">
+        <Users aria-hidden="true" size={30} />
+        <strong>No fellowship has gathered</strong>
+        <p>Create a room or enter a council sigil. Real players will appear here after they join.</p>
       </div>
-      <div className="player-list">
-        {players.map((player) => (
-          <article key={player.name} className="player-row">
-            <div>
-              <strong>{player.name}</strong>
-              <span>Seat {player.seat}</span>
-            </div>
-            <span className={player.ready ? "ready-chip" : "wait-chip"}>
-              {player.ready ? "Ready" : "Wait"}
-            </span>
-          </article>
-        ))}
-      </div>
-      <button type="button" className="wide-command">
+      <button type="button" className="wide-command" disabled>
         <Lock aria-hidden="true" size={18} />
-        <span>Seal the founding oath</span>
+        <span>Awaiting five players</span>
       </button>
     </section>
   );
