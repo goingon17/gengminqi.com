@@ -1,4 +1,5 @@
 import { getRedis } from "@/lib/relay/redis";
+import type { PlayerPublicKeys } from "@/lib/protocol/player-keys";
 
 export type RoomPlayer = {
   id: string;
@@ -6,6 +7,7 @@ export type RoomPlayer = {
   seat: number;
   joinedAt: number;
   lastSeen: number;
+  publicKeys?: PlayerPublicKeys;
 };
 
 export type RoomRecord = {
@@ -30,6 +32,7 @@ export type PublicRoom = Omit<RoomRecord, "players"> & {
 type JoinRoomInput = {
   playerId: string;
   name: string;
+  publicKeys?: PlayerPublicKeys;
 };
 
 const ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -104,6 +107,7 @@ export async function joinRoom(roomIdInput: string, input: JoinRoomInput): Promi
                 ...player,
                 name: cleanPlayerName(input.name),
                 lastSeen: now,
+                publicKeys: input.publicKeys ?? player.publicKeys,
               }
             : player,
         );
@@ -250,6 +254,7 @@ function buildPlayer(input: JoinRoomInput, seat: number, now: number): RoomPlaye
     seat,
     joinedAt: now,
     lastSeen: now,
+    publicKeys: input.publicKeys,
   };
 }
 

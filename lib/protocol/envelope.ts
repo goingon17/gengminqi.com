@@ -1,3 +1,5 @@
+import { isPlayerPublicKeys, type PlayerPublicKeys } from "@/lib/protocol/player-keys";
+
 export type RelayEnvelope = {
   protocolVersion: 1;
   roomId: string;
@@ -17,6 +19,7 @@ export type ClientFrame =
       roomId: string;
       playerId: string;
       name: string;
+      publicKeys?: PlayerPublicKeys;
     }
   | {
       type: "heartbeat";
@@ -52,12 +55,14 @@ export function parseClientFrame(raw: string): ClientFrame | null {
       const roomId = readString(parsed.roomId, 64);
       const playerId = readString(parsed.playerId, 128);
       const name = readString(parsed.name, 48);
+      const publicKeys =
+        parsed.publicKeys === undefined ? undefined : isPlayerPublicKeys(parsed.publicKeys) ? parsed.publicKeys : null;
 
-      if (!roomId || !playerId || !name) {
+      if (!roomId || !playerId || !name || publicKeys === null) {
         return null;
       }
 
-      return { type: "join", roomId, playerId, name };
+      return { type: "join", roomId, playerId, name, publicKeys };
     }
 
     if (parsed.type === "heartbeat") {

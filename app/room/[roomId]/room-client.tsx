@@ -15,7 +15,28 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { jsonFromBase64Url, jsonToBase64Url } from "@/lib/crypto/codec";
+import {
+  appendRoomEnvelope,
+  loadOrCreatePlayerIdentity,
+  loadRoomEnvelopes,
+} from "@/lib/crypto/local-store";
+import {
+  publicKeysFromIdentity,
+  type PlayerIdentity,
+} from "@/lib/crypto/player-identity";
 import type { RelayEnvelope } from "@/lib/protocol/envelope";
+import {
+  buildGenesis,
+  genesisChecksum,
+  genesisDigest,
+  genesisReady,
+} from "@/lib/protocol/genesis";
+import {
+  createSignedEnvelope,
+  relayEnvelopeHash,
+  verifyRelayEnvelope,
+} from "@/lib/protocol/signed-envelope";
 import type { PublicRoom } from "@/lib/relay/rooms";
 
 type SocketState = "idle" | "joining" | "open" | "closed" | "error";
@@ -63,8 +84,16 @@ type PublicRoomEvent = {
   senderId: string;
   text: string;
   sequence: number;
+  hash: string;
+  verified: boolean;
   receivedAt: number;
-  relay: "local" | "redis" | "replay";
+  relay: "local" | "redis" | "replay" | "stored";
+};
+
+type GenesisSummary = {
+  ready: boolean;
+  hash: string;
+  words: string[];
 };
 
 const HEARTBEAT_MS = 12_000;
@@ -76,17 +105,38 @@ export function RoomClient({ roomId }: { roomId: string }) {
   const heartbeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const manualDisconnectRef = useRef(false);
   const connectRef = useRef<() => void>(() => {});
-  const sequenceRef = useRef(0);
-  const previousHashRef = useRef("genesis");
+  const storedLogLoadedRef = useRef(false);
+  const seenHashesRef = useRef(new Set<string>());
+  const lastHashBySenderRef = useRef(new Map<string, string>());
+  const lastSequenceBySenderRef = useRef(new Map<string, number>());
 
   const [playerId, setPlayerId] = useState("");
   const [playerName, setPlayerName] = useState("Player");
+  const [identity, setIdentity] = useState<PlayerIdentity | null>(null);
   const [socketState, setSocketState] = useState<SocketState>("idle");
   const [redisConfigured, setRedisConfigured] = useState(false);
   const [room, setRoom] = useState<PublicRoom | null>(null);
   const [events, setEvents] = useState<PublicRoomEvent[]>([]);
+  const [genesis, setGenesis] = useState<GenesisSummary>({
+    ready: false,
+    hash: "",
+    words: [],
+  });
   const [draft, setDraft] = useState("Ready at the table");
   const [error, setError] = useState<string | null>(null);
+
+  const signingKeysByPlayer = useMemo(() => {
+    const keys = new Map<string, JsonWebKey>();
+    if (identity) {
+      keys.set(identity.playerId, identity.signingPublicKey);
+    }
+    for (const player of room?.players ?? []) {
+      if (player.publicKeys) {
+        keys.set(player.id, player.publicKeys.signingPublicKey);
+      }
+    }
+    return keys;
+  }, [identity, room]);
 
   const addEvent = useCallback((event: PublicRoomEvent) => {
     setEvents((current) => {
@@ -96,6 +146,70 @@ export function RoomClient({ roomId }: { roomId: string }) {
       return [event, ...current].slice(0, 24);
     });
   }, []);
+
+  const requestReplay = useCallback(() => {
+    const socket = socketRef.current;
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: "replay", roomId: normalizedRoomId }));
+    }
+  }, [normalizedRoomId]);
+
+  const acceptEnvelope = useCallback(
+    async (envelope: RelayEnvelope, relay: PublicRoomEvent["relay"]) => {
+      if (normalizeRoom(envelope.roomId) !== normalizedRoomId) {
+        return;
+      }
+
+      const hash = await relayEnvelopeHash(envelope);
+      if (seenHashesRef.current.has(hash)) {
+        return;
+      }
+
+      const publicKey = signingKeysByPlayer.get(envelope.senderId);
+      if (!publicKey) {
+        setError("Waiting for sender public key. Requesting replay.");
+        requestReplay();
+        return;
+      }
+
+      const verified = await verifyRelayEnvelope(envelope, publicKey);
+      if (!verified) {
+        setError(`Rejected invalid signature from ${envelope.senderId.slice(0, 8)}.`);
+        return;
+      }
+
+      const expectedSequence = (lastSequenceBySenderRef.current.get(envelope.senderId) ?? 0) + 1;
+      const expectedPreviousHash = lastHashBySenderRef.current.get(envelope.senderId) ?? "genesis";
+
+      if (envelope.sequence < expectedSequence) {
+        return;
+      }
+
+      if (envelope.sequence !== expectedSequence || envelope.previousHash !== expectedPreviousHash) {
+        setError("Detected a missing or forked event. Requesting replay.");
+        requestReplay();
+        return;
+      }
+
+      seenHashesRef.current.add(hash);
+      lastSequenceBySenderRef.current.set(envelope.senderId, envelope.sequence);
+      lastHashBySenderRef.current.set(envelope.senderId, hash);
+
+      if (relay !== "stored") {
+        await appendRoomEnvelope({
+          roomId: normalizedRoomId,
+          hash,
+          envelope,
+          relay,
+          receivedAt: Date.now(),
+        });
+      }
+
+      addEvent(publicEventFromEnvelope(envelope, relay, hash, verified));
+      setError(null);
+    },
+    [addEvent, normalizedRoomId, requestReplay, signingKeysByPlayer],
+  );
 
   const handleRelayMessage = useCallback(
     async (raw: string) => {
@@ -125,13 +239,13 @@ export function RoomClient({ roomId }: { roomId: string }) {
       if (event.type === "replay") {
         setRedisConfigured(event.redisConfigured);
         for (const envelope of event.envelopes) {
-          addEvent(publicEventFromEnvelope(envelope, "replay"));
+          await acceptEnvelope(envelope, "replay");
         }
         return;
       }
 
       if (event.type === "envelope") {
-        addEvent(publicEventFromEnvelope(event.envelope, event.relay));
+        await acceptEnvelope(event.envelope, event.relay);
         return;
       }
 
@@ -139,11 +253,11 @@ export function RoomClient({ roomId }: { roomId: string }) {
         setError(event.message);
       }
     },
-    [addEvent],
+    [acceptEnvelope],
   );
 
   const connect = useCallback(() => {
-    if (!playerId) {
+    if (!playerId || !identity) {
       return;
     }
 
@@ -172,6 +286,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
           roomId: normalizedRoomId,
           playerId,
           name: playerName,
+          publicKeys: publicKeysFromIdentity(identity),
         }),
       );
       heartbeatTimerRef.current = setInterval(() => {
@@ -207,7 +322,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
       setSocketState("error");
       setError("Socket error. Reconnect will retry.");
     });
-  }, [handleRelayMessage, normalizedRoomId, playerId, playerName]);
+  }, [handleRelayMessage, identity, normalizedRoomId, playerId, playerName]);
 
   useEffect(() => {
     connectRef.current = connect;
@@ -218,14 +333,23 @@ export function RoomClient({ roomId }: { roomId: string }) {
     const savedName = localStorage.getItem("avalon:playerName") ?? `Player ${savedPlayerId.slice(0, 4)}`;
     localStorage.setItem("avalon:playerId", savedPlayerId);
     localStorage.setItem("avalon:playerName", savedName);
-    queueMicrotask(() => {
-      setPlayerId(savedPlayerId);
-      setPlayerName(savedName);
-    });
+    void loadOrCreatePlayerIdentity(savedPlayerId, savedName)
+      .then((loadedIdentity) => {
+        queueMicrotask(() => {
+          setPlayerId(savedPlayerId);
+          setPlayerName(savedName);
+          setIdentity(loadedIdentity);
+        });
+      })
+      .catch(() => {
+        queueMicrotask(() => {
+          setError("Could not open local identity storage.");
+        });
+      });
   }, []);
 
   useEffect(() => {
-    if (playerId) {
+    if (playerId && identity) {
       queueMicrotask(() => {
         connectRef.current();
       });
@@ -241,7 +365,43 @@ export function RoomClient({ roomId }: { roomId: string }) {
       }
       socketRef.current?.close();
     };
-  }, [connect, playerId]);
+  }, [connect, identity, playerId]);
+
+  useEffect(() => {
+    if (!room) {
+      return;
+    }
+
+    const record = buildGenesis(room);
+    void Promise.all([genesisDigest(record), genesisChecksum(record)]).then(([hash, words]) => {
+      queueMicrotask(() => {
+        setGenesis({
+          ready: genesisReady(record),
+          hash,
+          words,
+        });
+      });
+    });
+  }, [room]);
+
+  useEffect(() => {
+    if (!room || !identity || storedLogLoadedRef.current) {
+      return;
+    }
+
+    storedLogLoadedRef.current = true;
+    void loadRoomEnvelopes(normalizedRoomId)
+      .then(async (stored) => {
+        for (const item of stored) {
+          await acceptEnvelope(item.envelope, "stored");
+        }
+      })
+      .catch(() => {
+        queueMicrotask(() => {
+          setError("Could not restore local event log.");
+        });
+      });
+  }, [acceptEnvelope, identity, normalizedRoomId, room]);
 
   async function sendPublicEvent() {
     const socket = socketRef.current;
@@ -250,31 +410,33 @@ export function RoomClient({ roomId }: { roomId: string }) {
       return;
     }
 
+    if (!identity) {
+      setError("Local identity is not ready yet.");
+      return;
+    }
+
     const text = draft.trim().slice(0, 120);
     if (!text) {
       return;
     }
 
-    const sequence = sequenceRef.current + 1;
-    const envelope: RelayEnvelope = {
-      protocolVersion: 1,
+    const sequence = (lastSequenceBySenderRef.current.get(playerId) ?? 0) + 1;
+    const previousHash = lastHashBySenderRef.current.get(playerId) ?? "genesis";
+    const envelope = await createSignedEnvelope({
       roomId: normalizedRoomId,
       senderId: playerId,
       recipients: "broadcast",
       sequence,
-      previousHash: previousHashRef.current,
+      previousHash,
       messageType: "room.public_event",
-      ciphertext: encodePayload({
+      ciphertext: jsonToBase64Url({
         text,
         name: playerName,
         sentAt: Date.now(),
       }),
-      signature: "stage3-public-placeholder",
-      sentAt: Date.now(),
-    };
+      identity,
+    });
 
-    previousHashRef.current = await hashText(JSON.stringify(envelope));
-    sequenceRef.current = sequence;
     socket.send(JSON.stringify({ type: "envelope", envelope }));
     setDraft("Ready at the table");
   }
@@ -332,6 +494,11 @@ export function RoomClient({ roomId }: { roomId: string }) {
             <RoomStat icon={Shield} label="Redis" value={redisConfigured ? "ready" : "local"} />
             <RoomStat icon={Activity} label="TTL" value={room ? `${Math.round(room.ttlSeconds / 3600)}h` : "-"} />
           </div>
+          <div className="genesis-card">
+            <span>Genesis</span>
+            <strong>{genesis.words.length ? genesis.words.join(" · ") : "waiting"}</strong>
+            <small>{genesis.ready ? `ready ${genesis.hash.slice(0, 12)}` : "needs 5 keyed players"}</small>
+          </div>
         </aside>
 
         <section className="room-panel">
@@ -350,6 +517,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
                 <div>
                   <strong>{player.name}</strong>
                   <span>Seat {player.seat}</span>
+                  <small>{player.publicKeys?.keyFingerprint ?? "missing keys"}</small>
                 </div>
                 <span className={player.online ? "online-dot online" : "online-dot"}>
                   {player.online ? <CheckCircle2 aria-hidden="true" size={17} /> : <Circle aria-hidden="true" size={17} />}
@@ -380,7 +548,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
               <li key={event.id}>
                 <span>#{event.sequence}</span>
                 <strong>{event.text}</strong>
-                <small>{event.relay}</small>
+                <small>{event.verified ? `${event.relay} · ${event.hash.slice(0, 8)}` : "rejected"}</small>
               </li>
             ))}
           </ol>
@@ -416,16 +584,24 @@ function parseRelayEvent(raw: string): RelayEvent | null {
   }
 }
 
-function publicEventFromEnvelope(envelope: RelayEnvelope, relay: "local" | "redis" | "replay"): PublicRoomEvent {
-  const payload = decodePayload(envelope.ciphertext);
-  const senderName = typeof payload.name === "string" ? payload.name : "Player";
-  const text = typeof payload.text === "string" ? payload.text : envelope.messageType;
+function publicEventFromEnvelope(
+  envelope: RelayEnvelope,
+  relay: PublicRoomEvent["relay"],
+  hash: string,
+  verified: boolean,
+): PublicRoomEvent {
+  const payload = jsonFromBase64Url(envelope.ciphertext);
+  const body = isRecord(payload) ? payload : {};
+  const senderName = typeof body.name === "string" ? body.name : "Player";
+  const text = typeof body.text === "string" ? body.text : envelope.messageType;
 
   return {
-    id: `${envelope.senderId}:${envelope.sequence}:${envelope.sentAt}`,
+    id: hash,
     senderId: envelope.senderId,
     text: `${senderName}: ${text}`,
     sequence: envelope.sequence,
+    hash,
+    verified,
     receivedAt: Date.now(),
     relay,
   };
@@ -440,36 +616,6 @@ function normalizeRoom(value: string): string {
   return value.trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 32);
 }
 
-function encodePayload(value: Record<string, unknown>): string {
-  return base64(new TextEncoder().encode(JSON.stringify(value)));
-}
-
-function decodePayload(value: string): Record<string, unknown> {
-  try {
-    return JSON.parse(new TextDecoder().decode(bytesFromBase64(value))) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
-}
-
-async function hashText(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return base64(new Uint8Array(digest));
-}
-
-function base64(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary);
-}
-
-function bytesFromBase64(value: string): Uint8Array {
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

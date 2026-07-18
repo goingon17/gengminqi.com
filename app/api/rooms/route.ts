@@ -5,6 +5,7 @@ import {
   joinRoom,
   normalizeRoomId,
 } from "@/lib/relay/rooms";
+import { isPlayerPublicKeys, type PlayerPublicKeys } from "@/lib/protocol/player-keys";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,7 +33,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const room = await createRoom({ playerId: body.playerId, name: body.name });
+    const room = await createRoom({ playerId: body.playerId, name: body.name, publicKeys: body.publicKeys });
     return Response.json({ room }, { status: 201 });
   } catch (error) {
     return Response.json({ error: errorMessage(error) }, { status: 400 });
@@ -46,7 +47,7 @@ export async function PUT(request: Request) {
   }
 
   try {
-    const room = await joinRoom(body.roomId, { playerId: body.playerId, name: body.name });
+    const room = await joinRoom(body.roomId, { playerId: body.playerId, name: body.name, publicKeys: body.publicKeys });
     return Response.json({ room });
   } catch (error) {
     const message = errorMessage(error);
@@ -58,6 +59,7 @@ async function readBody(request: Request): Promise<{
   roomId?: string;
   playerId: string;
   name: string;
+  publicKeys?: PlayerPublicKeys;
 } | null> {
   try {
     const parsed = (await request.json()) as unknown;
@@ -65,10 +67,17 @@ async function readBody(request: Request): Promise<{
       return null;
     }
 
+    const publicKeys =
+      parsed.publicKeys === undefined ? undefined : isPlayerPublicKeys(parsed.publicKeys) ? parsed.publicKeys : null;
+    if (publicKeys === null) {
+      return null;
+    }
+
     return {
       roomId: typeof parsed.roomId === "string" ? parsed.roomId : undefined,
       playerId: parsed.playerId,
       name: parsed.name,
+      publicKeys,
     };
   } catch {
     return null;

@@ -12,6 +12,7 @@ import {
   touchRoomPlayer,
   type PublicRoom,
 } from "@/lib/relay/rooms";
+import { verifyRelayEnvelope } from "@/lib/protocol/signed-envelope";
 
 type RelaySocket = {
   readyState: number;
@@ -171,6 +172,7 @@ export async function handleClientFrame(ws: RelaySocket, raw: string): Promise<v
     const room = await ensureRoomForSocketJoin(frame.roomId, {
       playerId: frame.playerId,
       name: frame.name,
+      publicKeys: frame.publicKeys,
     });
 
     conn.roomId = room.roomId;
@@ -246,6 +248,15 @@ export async function handleClientFrame(ws: RelaySocket, raw: string): Promise<v
     ...frame.envelope,
     roomId: envelopeRoomId,
   };
+  const sender = room.players.find((player) => player.id === conn.playerId);
+
+  if (sender?.publicKeys) {
+    const signatureOk = await verifyRelayEnvelope(envelope, sender.publicKeys.signingPublicKey);
+    if (!signatureOk) {
+      send(ws, { type: "error", message: "Envelope signature is invalid." });
+      return;
+    }
+  }
 
   broadcastEnvelope(envelope, "local");
   await persistEnvelope(envelope);

@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { loadOrCreatePlayerIdentity } from "@/lib/crypto/local-store";
+import { publicKeysFromIdentity } from "@/lib/crypto/player-identity";
 
 type PrototypeSurface = "entry" | "lobby" | "role" | "quest";
 
@@ -82,11 +84,13 @@ export function AvalonPrototype() {
 
     try {
       const playerId = getOrCreatePlayerId();
-      localStorage.setItem("avalon:playerName", cleanName(playerName));
+      const name = cleanName(playerName);
+      const identity = await loadOrCreatePlayerIdentity(playerId, name);
+      localStorage.setItem("avalon:playerName", name);
       const response = await fetch("/api/rooms", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ playerId, name: cleanName(playerName) }),
+        body: JSON.stringify({ playerId, name, publicKeys: publicKeysFromIdentity(identity) }),
       });
       const body = (await response.json()) as { room?: { roomId: string }; error?: string };
       if (!response.ok || !body.room) {
@@ -106,11 +110,13 @@ export function AvalonPrototype() {
     try {
       const playerId = getOrCreatePlayerId();
       const normalizedRoom = roomCode.trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
-      localStorage.setItem("avalon:playerName", cleanName(playerName));
+      const name = cleanName(playerName);
+      const identity = await loadOrCreatePlayerIdentity(playerId, name);
+      localStorage.setItem("avalon:playerName", name);
       const response = await fetch("/api/rooms", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ roomId: normalizedRoom, playerId, name: cleanName(playerName) }),
+        body: JSON.stringify({ roomId: normalizedRoom, playerId, name, publicKeys: publicKeysFromIdentity(identity) }),
       });
       const body = (await response.json()) as { room?: { roomId: string }; error?: string };
       if (!response.ok || !body.room) {
