@@ -70,7 +70,7 @@ import {
 import { currentLeader, currentQuest, type GameState } from "@/lib/game";
 import type { PublicRoom } from "@/lib/relay/rooms";
 
-type SocketState = "idle" | "joining" | "open" | "closed" | "error";
+type SocketState = "idle" | "joining" | "open" | "polling" | "closed" | "error";
 
 type RelayEvent =
   | {
@@ -118,8 +118,39 @@ type PublicRoomEvent = {
   hash: string;
   verified: boolean;
   receivedAt: number;
-  relay: "local" | "redis" | "replay" | "stored";
+  relay: "local" | "redis" | "polling" | "replay" | "stored";
 };
+
+type RoomSyncResponse = {
+  room: PublicRoom | null;
+  envelopes: RelayEnvelope[];
+  redisConfigured: boolean;
+  transport: "polling";
+  error?: string;
+};
+
+type PollingSyncBody =
+  | {
+      type: "join";
+      playerId: string;
+      name: string;
+      publicKeys: ReturnType<typeof publicKeysFromIdentity>;
+    }
+  | {
+      type: "heartbeat";
+      playerId: string;
+    }
+  | {
+      type: "lock";
+      playerId: string;
+    }
+  | {
+      type: "envelope";
+      envelope: RelayEnvelope;
+    }
+  | {
+      type: "replay";
+    };
 
 type GenesisSummary = {
   ready: boolean;
@@ -172,6 +203,7 @@ type LocalVoteDraft = {
 };
 
 const HEARTBEAT_MS = 12_000;
+const POLLING_MS = 3_000;
 const CLOCK_TICK_MS = 5_000;
 const PROTOCOL_WAIT_MS = 75_000;
 
@@ -180,8 +212,13 @@ export function RoomClient({ roomId }: { roomId: string }) {
   const socketRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const heartbeatTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const connectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollingActiveRef = useRef(false);
   const manualDisconnectRef = useRef(false);
   const connectRef = useRef<() => void>(() => {});
+  const startPollingRef = useRef<() => void>(() => {});
+  const pollReplayRef = useRef<() => void>(() => {});
   const storedLogLoadedRef = useRef(false);
   const seenHashesRef = useRef(new Set<string>());
   const lastHashBySenderRef = useRef(new Map<string, string>());
@@ -275,7 +312,9 @@ export function RoomClient({ roomId }: { roomId: string }) {
     const socket = socketRef.current;
     if (socket?.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ type: "replay", roomId: normalizedRoomId }));
+      return;
     }
+    pollReplayRef.current();
   }, [normalizedRoomId]);
 
   const acceptEnvelope = useCallback(
@@ -406,11 +445,96 @@ export function RoomClient({ roomId }: { roomId: string }) {
     [acceptEnvelope, markActivity],
   );
 
+  const processRoomSync = useCallback(
+    async (sync: RoomSyncResponse) => {
+      setRedisConfigured(sync.redisConfigured);
+      if (sync.room) {
+        setRoom(sync.room);
+      }
+      for (const envelope of sync.envelopes) {
+        await acceptEnvelope(envelope, "polling");
+      }
+      markActivity();
+      setError(null);
+    },
+    [acceptEnvelope, markActivity],
+  );
+
+  const postRoomSync = useCallback(
+    async (body: PollingSyncBody) => {
+      const response = await fetch(`/api/rooms/${encodeURIComponent(normalizedRoomId)}/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const sync = (await response.json()) as RoomSyncResponse;
+      if (!response.ok) {
+        throw new Error(sync.error ?? "Room sync failed.");
+      }
+      await processRoomSync(sync);
+    },
+    [normalizedRoomId, processRoomSync],
+  );
+
+  const startPolling = useCallback(() => {
+    if (!playerId || !identity) {
+      return;
+    }
+
+    pollingActiveRef.current = true;
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    if (heartbeatTimerRef.current) {
+      clearInterval(heartbeatTimerRef.current);
+      heartbeatTimerRef.current = null;
+    }
+    if (connectTimeoutRef.current) {
+      clearTimeout(connectTimeoutRef.current);
+      connectTimeoutRef.current = null;
+    }
+
+    setSocketState("polling");
+    void postRoomSync({
+      type: "join",
+      playerId,
+      name: playerName,
+      publicKeys: publicKeysFromIdentity(identity),
+    }).catch(() => {
+      setSocketState("error");
+      setError("Relay compatibility mode is retrying.");
+    });
+
+    if (!pollingTimerRef.current) {
+      pollingTimerRef.current = setInterval(() => {
+        void postRoomSync({ type: "heartbeat", playerId }).catch(() => {
+          setSocketState("error");
+          setError("Relay compatibility mode is retrying.");
+        });
+      }, POLLING_MS);
+    }
+  }, [identity, playerId, playerName, postRoomSync]);
+
+  useEffect(() => {
+    startPollingRef.current = startPolling;
+    pollReplayRef.current = () => {
+      void postRoomSync({ type: "replay" }).catch(() => {
+        setError("Could not replay the room yet.");
+      });
+    };
+  }, [postRoomSync, startPolling]);
+
   const connect = useCallback(() => {
     if (!playerId || !identity) {
       return;
     }
 
+    pollingActiveRef.current = false;
+    if (pollingTimerRef.current) {
+      clearInterval(pollingTimerRef.current);
+      pollingTimerRef.current = null;
+    }
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
@@ -427,8 +551,20 @@ export function RoomClient({ roomId }: { roomId: string }) {
 
     const socket = new WebSocket(webSocketUrl());
     socketRef.current = socket;
+    connectTimeoutRef.current = setTimeout(() => {
+      if (socketRef.current !== socket || socket.readyState === WebSocket.OPEN) {
+        return;
+      }
+      setError(null);
+      startPollingRef.current();
+      socket.close();
+    }, 3_500);
 
     socket.addEventListener("open", () => {
+      if (connectTimeoutRef.current) {
+        clearTimeout(connectTimeoutRef.current);
+        connectTimeoutRef.current = null;
+      }
       setSocketState("open");
       socket.send(
         JSON.stringify({
@@ -459,9 +595,13 @@ export function RoomClient({ roomId }: { roomId: string }) {
         clearInterval(heartbeatTimerRef.current);
         heartbeatTimerRef.current = null;
       }
+      if (connectTimeoutRef.current) {
+        clearTimeout(connectTimeoutRef.current);
+        connectTimeoutRef.current = null;
+      }
 
       setSocketState("closed");
-      if (!manualDisconnectRef.current) {
+      if (!manualDisconnectRef.current && !pollingActiveRef.current) {
         reconnectTimerRef.current = setTimeout(() => {
           connectRef.current();
         }, 1_200);
@@ -469,8 +609,13 @@ export function RoomClient({ roomId }: { roomId: string }) {
     });
 
     socket.addEventListener("error", () => {
-      setSocketState("error");
-      setError("Socket error. Reconnect will retry.");
+      if (connectTimeoutRef.current) {
+        clearTimeout(connectTimeoutRef.current);
+        connectTimeoutRef.current = null;
+      }
+      setSocketState("polling");
+      setError(null);
+      startPollingRef.current();
     });
   }, [handleRelayMessage, identity, normalizedRoomId, playerId, playerName]);
 
@@ -517,6 +662,11 @@ export function RoomClient({ roomId }: { roomId: string }) {
 
       if (socketRef.current?.readyState === WebSocket.OPEN) {
         requestReplay();
+        return;
+      }
+
+      if (pollingActiveRef.current) {
+        pollReplayRef.current();
         return;
       }
 
@@ -581,6 +731,12 @@ export function RoomClient({ roomId }: { roomId: string }) {
       }
       if (heartbeatTimerRef.current) {
         clearInterval(heartbeatTimerRef.current);
+      }
+      if (connectTimeoutRef.current) {
+        clearTimeout(connectTimeoutRef.current);
+      }
+      if (pollingTimerRef.current) {
+        clearInterval(pollingTimerRef.current);
       }
       socketRef.current?.close();
     };
@@ -891,11 +1047,6 @@ export function RoomClient({ roomId }: { roomId: string }) {
     }
 
     const socket = socketRef.current;
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
-      setError("Socket is not connected yet.");
-      return;
-    }
-
     if (!identity) {
       setError("Local identity is not ready yet.");
       return;
@@ -914,7 +1065,17 @@ export function RoomClient({ roomId }: { roomId: string }) {
       identity,
     });
 
-    socket.send(JSON.stringify({ type: "envelope", envelope }));
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: "envelope", envelope }));
+      return;
+    }
+
+    if (pollingActiveRef.current || socketState === "polling") {
+      await postRoomSync({ type: "envelope", envelope });
+      return;
+    }
+
+    setError("Relay is not connected yet.");
   }
 
   function abortLocalProtocol() {
@@ -937,16 +1098,32 @@ export function RoomClient({ roomId }: { roomId: string }) {
 
   function lockCurrentRoom() {
     const socket = socketRef.current;
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
-      setError("Socket is not connected yet.");
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: "room.lock", roomId: normalizedRoomId, playerId }));
       return;
     }
 
-    socket.send(JSON.stringify({ type: "room.lock", roomId: normalizedRoomId, playerId }));
+    if (pollingActiveRef.current || socketState === "polling") {
+      void postRoomSync({ type: "lock", playerId }).catch((lockError) => {
+        setError(errorText(lockError));
+      });
+      return;
+    }
+
+    setError("Relay is not connected yet.");
   }
 
   function reconnectNow() {
     manualDisconnectRef.current = false;
+    pollingActiveRef.current = false;
+    if (pollingTimerRef.current) {
+      clearInterval(pollingTimerRef.current);
+      pollingTimerRef.current = null;
+    }
+    if (connectTimeoutRef.current) {
+      clearTimeout(connectTimeoutRef.current);
+      connectTimeoutRef.current = null;
+    }
     connect();
   }
 
@@ -979,6 +1156,12 @@ export function RoomClient({ roomId }: { roomId: string }) {
   const isCurrentLeader = Boolean(gameLeader && gameLeader.id === playerId);
   const isMissionMember = Boolean(gameState?.activeProposal?.team.includes(playerId));
   const isAssassin = roleView?.self.role === "assassin";
+  const connectionLabel =
+    socketState === "open"
+      ? "WebSocket"
+      : socketState === "polling"
+        ? "Sync relay"
+        : socketState;
   const waitCopy = protocolWaitCopy({
     genesisReady: genesis.ready,
     keyedCount: rolePlayerIds.length,
@@ -998,6 +1181,12 @@ export function RoomClient({ roomId }: { roomId: string }) {
           title: "Protocol paused locally",
           detail: "This device will keep verifying incoming events, but it will not send new signed protocol events until resumed.",
         }
+      : socketState === "polling"
+        ? {
+            tone: "wait",
+            title: "Compatibility relay",
+            detail: "WebSocket is unavailable in this browser, so the room is syncing signed events every few seconds.",
+          }
       : socketState !== "open"
         ? {
             tone: "danger",
@@ -1021,7 +1210,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
                 title: rolePhase === "ready" ? "Protocol live" : "Protocol waiting",
                 detail: waitCopy,
               };
-  const canSendProtocol = socketState === "open" && !terminated;
+  const canSendProtocol = (socketState === "open" || socketState === "polling") && !terminated;
   const canSendPublicEvent = canSendProtocol && draft.trim().length > 0;
   const canCommit = canSendProtocol && genesis.ready && Boolean(roleSeed) && !localCommitted;
   const canReveal =
@@ -1055,7 +1244,7 @@ export function RoomClient({ roomId }: { roomId: string }) {
         </Link>
         <div className={`room-connection ${socketState}`}>
           <Radio aria-hidden="true" size={17} />
-          <span>{socketState}</span>
+          <span>{connectionLabel}</span>
         </div>
       </header>
 
@@ -1653,6 +1842,10 @@ function playerNameById(players: RoleProtocolPlayer[], playerId: string): string
 
 function currentTimestamp(): number {
   return Date.now();
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : "Room action failed.";
 }
 
 function webSocketUrl(): string {

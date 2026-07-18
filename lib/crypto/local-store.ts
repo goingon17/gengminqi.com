@@ -14,7 +14,7 @@ export type StoredRoomEnvelope = {
   roomId: string;
   hash: string;
   envelope: RelayEnvelope;
-  relay: "local" | "redis" | "replay" | "stored";
+  relay: "local" | "redis" | "polling" | "replay" | "stored";
   receivedAt: number;
 };
 

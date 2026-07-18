@@ -764,6 +764,11 @@ body {
   color: #ead9ad;
 }
 
+.room-connection.polling {
+  border-color: rgba(196, 163, 90, 0.68);
+  color: #f2dfaa;
+}
+
 .room-connection.error {
   border-color: rgba(156, 48, 48, 0.72);
   color: #f0bbb7;

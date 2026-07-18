@@ -3,6 +3,10 @@ import {
   parseClientFrame,
   type RelayEnvelope,
 } from "@/lib/protocol/envelope";
+import {
+  appendRoomEnvelopeToLog,
+  loadRoomEnvelopeLog,
+} from "@/lib/relay/event-log";
 import { fieldsToObject, getRedis, redisConfigured } from "@/lib/relay/redis";
 import {
   ensureRoomForSocketJoin,
@@ -93,9 +97,7 @@ type HubState = {
 };
 
 const FANOUT_STREAM = "avalon:relay:fanout";
-const ROOM_STREAM_PREFIX = "avalon:relay:room:";
 const FANOUT_MAXLEN = 5_000;
-const ROOM_MAXLEN = 1_000;
 const ROOM_TTL_SECONDS = 60 * 60 * 6;
 const BLOCK_MS = 5_000;
 const HEARTBEAT_MS = 15_000;
@@ -314,20 +316,12 @@ function broadcastToRoom(roomId: string, event: ServerEvent): void {
 async function replayRoom(ws: RelaySocket, roomId: string): Promise<void> {
   const redis = getRedis();
   if (!redis) {
-    send(ws, { type: "replay", roomId, envelopes: [], redisConfigured: false });
+    send(ws, { type: "replay", roomId, envelopes: await loadRoomEnvelopeLog(roomId), redisConfigured: false });
     return;
   }
 
   try {
-    const entries = (await redis.xrevrange(roomStreamKey(roomId), "+", "-", "COUNT", 100)) as RedisStreamEntry[];
-    const envelopes = entries
-      .map((entry) => fieldsToObject(entry[1]).d)
-      .filter(Boolean)
-      .map(parseEnvelopePayload)
-      .filter((envelope): envelope is RelayEnvelope => envelope !== null)
-      .reverse();
-
-    send(ws, { type: "replay", roomId, envelopes, redisConfigured: true });
+    send(ws, { type: "replay", roomId, envelopes: await loadRoomEnvelopeLog(roomId), redisConfigured: true });
   } catch {
     send(ws, { type: "replay", roomId, envelopes: [], redisConfigured: true });
   }
@@ -336,10 +330,9 @@ async function replayRoom(ws: RelaySocket, roomId: string): Promise<void> {
 async function persistEnvelope(envelope: RelayEnvelope): Promise<void> {
   const redis = getRedis();
   if (!redis) {
+    await appendRoomEnvelopeToLog(envelope);
     return;
   }
-
-  const data = JSON.stringify(envelope);
 
   await redis.xadd(
     FANOUT_STREAM,
@@ -351,9 +344,7 @@ async function persistEnvelope(envelope: RelayEnvelope): Promise<void> {
     JSON.stringify({ kind: "envelope", envelope, origin: hub.instanceId } satisfies FanoutPayload),
   );
 
-  const key = roomStreamKey(envelope.roomId);
-  await redis.xadd(key, "MAXLEN", "~", ROOM_MAXLEN, "*", "d", data);
-  await redis.expire(key, ROOM_TTL_SECONDS);
+  await appendRoomEnvelopeToLog(envelope);
 }
 
 async function publishRoomUpdate(roomId: string): Promise<void> {
@@ -442,19 +433,6 @@ async function runReadLoop(): Promise<void> {
   }
 }
 
-function parseEnvelopePayload(value: string | undefined): RelayEnvelope | null {
-  if (!value) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return isRelayEnvelope(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
 function parseFanoutPayload(value: string | undefined): FanoutPayload | null {
   if (!value) {
     return null;
@@ -516,10 +494,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Room operation failed.";
-}
-
-function roomStreamKey(roomId: string): string {
-  return `${ROOM_STREAM_PREFIX}${roomId}`;
 }
 
 function sleep(ms: number): Promise<void> {
