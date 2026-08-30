@@ -1,7 +1,6 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["ioredis", "ws"],
   async headers() {
     const securityHeaders = [
       {
@@ -12,8 +11,8 @@ const nextConfig: NextConfig = {
           "style-src 'self' 'unsafe-inline'",
           "img-src 'self' data: blob:",
           "font-src 'self' data:",
-          "connect-src 'self' https: wss:",
-          "worker-src 'self' blob:",
+          "connect-src 'self' https:",
+          "worker-src 'self'",
           "object-src 'none'",
           "base-uri 'self'",
           "form-action 'self'",
