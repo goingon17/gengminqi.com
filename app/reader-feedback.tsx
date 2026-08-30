@@ -43,7 +43,7 @@ export function ReaderFeedback() {
         setData(next);
         setStage(stageFor(next.reader));
         setChoice(next.reader?.helpful ?? null);
-        setMessage(next.available ? "匿名记录，不公开个人信息" : "计数服务暂未连接");
+        setMessage(next.available ? "匿名记录" : "计数服务暂未连接");
       })
       .catch(() => active && setMessage("计数服务暂未连接"));
     return () => { active = false; };
@@ -111,7 +111,7 @@ export function ReaderFeedback() {
       {stage === "view" && (
         <button className="feedback-view" type="button" onClick={() => void markViewed()} disabled={busy || !data.available}>
           <span>读者计数</span>
-          <strong><b>{data.views.toLocaleString("zh-CN")}</b> 人看过</strong>
+          <strong><b>{data.views.toLocaleString("zh-CN")}</b> 人看过（点击）</strong>
           <i>{busy ? "…" : "+1"}</i>
         </button>
       )}
@@ -119,7 +119,7 @@ export function ReaderFeedback() {
       {stage === "helpful" && (
         <div className="feedback-step feedback-helpful">
           <span>有收获？</span>
-          <strong>这篇内容对你有帮助吗</strong>
+          <strong>你觉得鸽子知道自己会飞吗？</strong>
           <div className={`feedback-slider${choice ? ` is-${choice}` : ""}`} role="group" aria-label="这篇内容是否有帮助">
             <span className="slider-thumb" aria-hidden="true" />
             <button type="button" aria-pressed={choice === "no"} disabled={busy} onClick={() => void answerHelpful("no")}>否</button>
@@ -132,9 +132,9 @@ export function ReaderFeedback() {
         <form className="feedback-step feedback-contact" onSubmit={(event) => void finish(event)}>
           <span>保持联系 · 可选</span>
           <label>
-            <strong>愿意收到后续内容吗</strong>
+            <strong>加个微信？</strong>
             <input value={contact} onChange={(event) => setContact(event.target.value)} maxLength={180} placeholder="邮箱 / 微信 / 其他方式" aria-label="联系方式，可选" />
-            <small>仅用于内容通知，不公开展示。</small>
+            <small>我的微信号：o65537。</small>
           </label>
           <div className="contact-actions">
             <button type="button" onClick={() => void finish(undefined, true)} disabled={busy}>跳过</button>

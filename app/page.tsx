@@ -18,7 +18,7 @@ export default function Home() {
 
       <section className="hero" id="top">
         <div className="hero-wash" aria-hidden="true" />
-        <div className="eyebrow"><span>Chapter 1 · 密码学</span><span>Cryptography</span></div>
+        <div className="eyebrow"><span>密码学 · Cryptography</span><span>让信任有规则可循</span></div>
         <div className="hero-copy">
           <p className="hero-chapter">Fully Homomorphic Encryption</p>
           <h1>隐私，<br />仍可<span>计算</span>。</h1>
