@@ -5,6 +5,15 @@ export const metadata: Metadata = {
   metadataBase: new URL("https://gengminqi.com"),
   title: "隐私，仍可计算｜FHE 全同态加密",
   description: "从直觉、交互实验到数学原理，读懂全同态加密如何让机器在看不见数据的情况下完成计算。",
+  icons: {
+    icon: [
+      {
+        url: "/favicon.png",
+        type: "image/png",
+        sizes: "24x24",
+      },
+    ],
+  },
   openGraph: {
     title: "隐私，仍可计算｜gengminqi.com",
     description: "用 AI，让计算机科学被看见和理解。Chapter 1：密码学。",

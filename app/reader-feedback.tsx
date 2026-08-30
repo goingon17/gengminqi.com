@@ -118,7 +118,7 @@ export function ReaderFeedback() {
 
       {stage === "helpful" && (
         <div className="feedback-step feedback-helpful">
-          <span aria-hidden="true" />
+          <span>问个问题</span>
           <strong>你觉得鸽子知道自己会飞吗？</strong>
           <div className={`feedback-slider${choice ? ` is-${choice}` : ""}`} role="group" aria-label="这篇内容是否有帮助">
             <span className="slider-thumb" aria-hidden="true" />
@@ -130,7 +130,7 @@ export function ReaderFeedback() {
 
       {stage === "contact" && (
         <form className="feedback-step feedback-contact" onSubmit={(event) => void finish(event)}>
-          <span>联系我</span>
+          <span>👉</span>
           <label>
             <strong>加个微信？</strong>
             <input value={contact} onChange={(event) => setContact(event.target.value)} maxLength={180} placeholder="邮箱 / 微信 / 其他方式" aria-label="联系方式，可选" />
