@@ -30,4 +30,4 @@ pnpm typecheck
 pnpm build
 ```
 
-项目使用 Next.js App Router，可由 GitHub 推送触发 Vercel 自动部署。读者反馈由 `/api/feedback` 接收，并使用 Upstash Redis 持久化；Vercel 环境需提供 `UPSTASH_REDIS_REST_URL` 与 `UPSTASH_REDIS_REST_TOKEN`。
+项目使用 Next.js App Router，可由 GitHub 推送触发 Vercel 自动部署。读者反馈由 `/api/feedback` 接收，并使用 Neon Postgres 持久化；Vercel 环境需提供 `DATABASE_URL`。接口首次连接时会自动创建 `reader_feedback` 表。

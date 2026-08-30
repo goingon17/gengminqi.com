@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Redis as UpstashRedis } from "@upstash/redis";
-import IORedis from "ioredis";
+import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
@@ -9,128 +8,96 @@ export const dynamic = "force-dynamic";
 
 type Helpful = "yes" | "no" | null;
 type ReaderState = { viewed: boolean; helpful: Helpful; completed: boolean };
-type Store = { kind: "tcp"; client: IORedis } | { kind: "rest"; client: UpstashRedis };
+type Sql = NeonQueryFunction<false, false>;
 
-const viewsKey = "gengminqi:fhe:views:v1";
-const helpfulKey = "gengminqi:fhe:helpful:v1";
-const readersKey = "gengminqi:fhe:readers:v1";
-const contactsKey = "gengminqi:fhe:contacts:v1";
 const readerCookie = "gengminqi_reader";
-const emptyReader: ReaderState = { viewed: false, helpful: null, completed: false };
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const redisGlobal = globalThis as typeof globalThis & {
-  gengminqiFeedbackTcpRedis?: IORedis;
-  gengminqiFeedbackRestRedis?: UpstashRedis;
+const databaseGlobal = globalThis as typeof globalThis & {
+  gengminqiFeedbackSchema?: Promise<void>;
 };
 
-function restCredentials() {
-  const env = process.env;
-  const candidates: Array<[string | undefined, string | undefined]> = [
-    [env.UPSTASH_REDIS_REST_URL, env.UPSTASH_REDIS_REST_TOKEN],
-    [env.KV_REST_API_URL, env.KV_REST_API_TOKEN],
-    [env.REDIS_URL_UPSTASH_REDIS_REST_URL, env.REDIS_URL_UPSTASH_REDIS_REST_TOKEN],
-    [env.REDIS_URL_KV_REST_API_URL, env.REDIS_URL_KV_REST_API_TOKEN],
-    [env.REDIS_URL_REST_URL, env.REDIS_URL_REST_TOKEN],
-    [env.REDIS_URL_URL, env.REDIS_URL_TOKEN],
-    [env.REDIS_URL?.startsWith("http") ? env.REDIS_URL : undefined, env.REDIS_URL_REST_TOKEN ?? env.REDIS_URL_TOKEN],
-  ];
-  for (const [url, token] of candidates) if (url?.startsWith("http") && token) return { url, token };
-  return null;
+function database() {
+  const connectionString = process.env.DATABASE_URL?.trim();
+  return connectionString ? neon(connectionString) : null;
 }
 
-function feedbackStore(): Store | null {
-  const tcpUrl = process.env.REDIS_URL?.trim();
-  if (tcpUrl?.startsWith("redis://") || tcpUrl?.startsWith("rediss://")) {
-    redisGlobal.gengminqiFeedbackTcpRedis ??= new IORedis(tcpUrl, {
-      lazyConnect: true,
-      maxRetriesPerRequest: 1,
-      connectTimeout: 2500,
-      enableReadyCheck: false,
-    });
-    return { kind: "tcp", client: redisGlobal.gengminqiFeedbackTcpRedis };
-  }
-  const credentials = restCredentials();
-  if (!credentials) return null;
-  redisGlobal.gengminqiFeedbackRestRedis ??= new UpstashRedis(credentials);
-  return { kind: "rest", client: redisGlobal.gengminqiFeedbackRestRedis };
+async function ensureSchema(sql: Sql) {
+  databaseGlobal.gengminqiFeedbackSchema ??= (async () => {
+    await sql`
+      CREATE TABLE IF NOT EXISTS reader_feedback (
+        reader_id UUID PRIMARY KEY,
+        viewed BOOLEAN NOT NULL DEFAULT FALSE,
+        helpful BOOLEAN,
+        completed BOOLEAN NOT NULL DEFAULT FALSE,
+        contact TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `;
+    await sql`
+      CREATE INDEX IF NOT EXISTS reader_feedback_created_at_idx
+      ON reader_feedback (created_at DESC)
+    `;
+  })().catch((error) => {
+    databaseGlobal.gengminqiFeedbackSchema = undefined;
+    throw error;
+  });
+  return databaseGlobal.gengminqiFeedbackSchema;
 }
 
-async function ensureConnected(redis: IORedis) {
-  if (redis.status === "wait") await redis.connect();
+function cookieReaderId(value?: string) {
+  return value && uuidPattern.test(value) ? value : undefined;
 }
 
-function parseReader(raw: unknown): ReaderState {
-  try {
-    const value = typeof raw === "string" ? JSON.parse(raw) : raw;
-    if (!value || typeof value !== "object") return { ...emptyReader };
-    const reader = value as Partial<ReaderState>;
-    return {
-      viewed: reader.viewed === true,
-      helpful: reader.helpful === "yes" || reader.helpful === "no" ? reader.helpful : null,
-      completed: reader.completed === true,
-    };
-  } catch {
-    return { ...emptyReader };
-  }
-}
-
-async function readReader(store: Store, readerId?: string) {
-  if (!readerId) return { ...emptyReader };
-  if (store.kind === "tcp") {
-    await ensureConnected(store.client);
-    return parseReader(await store.client.hget(readersKey, readerId));
-  }
-  return parseReader(await store.client.hget<unknown>(readersKey, readerId));
-}
-
-async function writeReader(store: Store, readerId: string, state: ReaderState) {
-  const serialized = JSON.stringify(state);
-  if (store.kind === "tcp") return store.client.hset(readersKey, readerId, serialized);
-  return store.client.hset(readersKey, { [readerId]: serialized });
-}
-
-async function incrementView(store: Store) {
-  if (store.kind === "tcp") return store.client.incr(viewsKey);
-  return store.client.incr(viewsKey);
-}
-
-async function incrementHelpful(store: Store, value: Exclude<Helpful, null>, amount: number) {
-  if (store.kind === "tcp") return store.client.hincrby(helpfulKey, value, amount);
-  return store.client.hincrby(helpfulKey, value, amount);
-}
-
-async function saveContact(store: Store, readerId: string, contact: string) {
-  const record = JSON.stringify({ contact, createdAt: new Date().toISOString(), article: "fhe-introduction" });
-  if (store.kind === "tcp") return store.client.hset(contactsKey, readerId, record);
-  return store.client.hset(contactsKey, { [readerId]: record });
-}
-
-async function readStats(store: Store) {
-  if (store.kind === "tcp") await ensureConnected(store.client);
-  const [rawViews, rawHelpful] = await Promise.all([
-    store.client.get(viewsKey),
-    store.client.hgetall<Record<string, unknown>>(helpfulKey),
-  ]);
+async function readReader(sql: Sql, readerId?: string): Promise<ReaderState | null> {
+  if (!readerId) return null;
+  const rows = await sql`
+    SELECT viewed, helpful, completed
+    FROM reader_feedback
+    WHERE reader_id = ${readerId}::uuid
+    LIMIT 1
+  `;
+  const row = rows[0] as { viewed?: boolean; helpful?: boolean | null; completed?: boolean } | undefined;
+  if (!row) return null;
   return {
-    views: Math.max(0, Number(rawViews) || 0),
+    viewed: row.viewed === true,
+    helpful: row.helpful === true ? "yes" : row.helpful === false ? "no" : null,
+    completed: row.completed === true,
+  };
+}
+
+async function readStats(sql: Sql) {
+  const rows = await sql`
+    SELECT
+      COUNT(*) FILTER (WHERE viewed) AS views,
+      COUNT(*) FILTER (WHERE helpful IS TRUE) AS helpful_yes,
+      COUNT(*) FILTER (WHERE helpful IS FALSE) AS helpful_no
+    FROM reader_feedback
+  `;
+  const row = rows[0] as { views?: string | number; helpful_yes?: string | number; helpful_no?: string | number } | undefined;
+  return {
+    views: Math.max(0, Number(row?.views) || 0),
     helpful: {
-      yes: Math.max(0, Number(rawHelpful?.yes) || 0),
-      no: Math.max(0, Number(rawHelpful?.no) || 0),
+      yes: Math.max(0, Number(row?.helpful_yes) || 0),
+      no: Math.max(0, Number(row?.helpful_no) || 0),
     },
   };
 }
 
-async function responseData(store: Store, readerId?: string) {
-  const [stats, reader] = await Promise.all([readStats(store), readReader(store, readerId)]);
+async function responseData(sql: Sql, readerId?: string) {
+  const [stats, reader] = await Promise.all([readStats(sql), readReader(sql, readerId)]);
   return { ...stats, reader, available: true };
 }
 
 export async function GET() {
-  const store = feedbackStore();
-  if (!store) return NextResponse.json({ views: 0, helpful: { yes: 0, no: 0 }, reader: null, available: false });
-  const readerId = (await cookies()).get(readerCookie)?.value;
+  const sql = database();
+  if (!sql) return NextResponse.json({ views: 0, helpful: { yes: 0, no: 0 }, reader: null, available: false });
+
+  const readerId = cookieReaderId((await cookies()).get(readerCookie)?.value);
   try {
-    return NextResponse.json(await responseData(store, readerId));
+    await ensureSchema(sql);
+    return NextResponse.json(await responseData(sql, readerId));
   } catch {
     return NextResponse.json({ views: 0, helpful: { yes: 0, no: 0 }, reader: null, available: false });
   }
@@ -146,37 +113,49 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "invalid vote" }, { status: 400 });
   }
 
-  const rawContact = typeof body?.contact === "string" ? body.contact.trim().replaceAll("\0", "") : "";
-  if (rawContact.length > 180) return NextResponse.json({ error: "contact too long" }, { status: 400 });
+  const contact = typeof body?.contact === "string" ? body.contact.trim().replaceAll("\0", "") : "";
+  if (contact.length > 180) return NextResponse.json({ error: "contact too long" }, { status: 400 });
 
-  const store = feedbackStore();
-  if (!store) return NextResponse.json({ error: "feedback storage unavailable" }, { status: 503 });
+  const sql = database();
+  if (!sql) return NextResponse.json({ error: "feedback storage unavailable" }, { status: 503 });
 
   const cookieStore = await cookies();
-  const readerId = cookieStore.get(readerCookie)?.value ?? randomUUID();
+  const readerId = cookieReaderId(cookieStore.get(readerCookie)?.value) ?? randomUUID();
 
   try {
-    const reader = await readReader(store, readerId);
-    if (!reader.viewed) {
-      await incrementView(store);
-      reader.viewed = true;
+    await ensureSchema(sql);
+
+    if (action === "view") {
+      await sql`
+        INSERT INTO reader_feedback (reader_id, viewed)
+        VALUES (${readerId}::uuid, TRUE)
+        ON CONFLICT (reader_id) DO UPDATE
+        SET viewed = TRUE, updated_at = NOW()
+      `;
     }
 
     if (action === "helpful") {
-      const nextHelpful = body.value ? "yes" : "no";
-      if (reader.helpful && reader.helpful !== nextHelpful) await incrementHelpful(store, reader.helpful, -1);
-      if (reader.helpful !== nextHelpful) await incrementHelpful(store, nextHelpful, 1);
-      reader.helpful = nextHelpful;
+      await sql`
+        INSERT INTO reader_feedback (reader_id, viewed, helpful)
+        VALUES (${readerId}::uuid, TRUE, ${body.value})
+        ON CONFLICT (reader_id) DO UPDATE
+        SET viewed = TRUE, helpful = EXCLUDED.helpful, updated_at = NOW()
+      `;
     }
 
     if (action === "finish") {
-      if (!reader.helpful) return NextResponse.json({ error: "vote first" }, { status: 409 });
-      if (rawContact) await saveContact(store, readerId, rawContact);
-      reader.completed = true;
+      const updated = await sql`
+        UPDATE reader_feedback
+        SET completed = TRUE,
+            contact = CASE WHEN ${contact} = '' THEN contact ELSE ${contact} END,
+            updated_at = NOW()
+        WHERE reader_id = ${readerId}::uuid AND helpful IS NOT NULL
+        RETURNING reader_id
+      `;
+      if (updated.length === 0) return NextResponse.json({ error: "vote first" }, { status: 409 });
     }
 
-    await writeReader(store, readerId, reader);
-    const response = NextResponse.json(await responseData(store, readerId));
+    const response = NextResponse.json(await responseData(sql, readerId));
     response.cookies.set(readerCookie, readerId, {
       httpOnly: true,
       sameSite: "lax",

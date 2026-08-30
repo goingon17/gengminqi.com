@@ -85,7 +85,7 @@ export default function Home() {
         </div>
       </section>
 
-      <footer><div className="footer-mark"><span className="wordmark-dot" /> gengminqi.com</div><p>用 AI，让计算机科学被看见和理解。</p><p>© 2026 · Beijing / Everywhere</p></footer>
+      <footer><div className="footer-mark"><span className="wordmark-dot" /> gengminqi.com</div><p>© 2026 · Beijing / Everywhere</p></footer>
     </main>
   );
 }
