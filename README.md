@@ -1,6 +1,6 @@
 # gengminqi.com
 
-一个写给好奇者的计算机科学科普网站。第一篇交互长文从 FHE（Fully Homomorphic Encryption，全同态加密）开始：用直觉、实验和必要的数学解释“机器如何在看不见数据的情况下完成计算”。
+一个用 AI 让计算机科学被看见和理解的科普网站。Chapter 1 从密码学开始，第一篇交互长文介绍 FHE（Fully Homomorphic Encryption，全同态加密）：用直觉、实验和必要的数学解释“机器如何在看不见数据的情况下完成计算”。
 
 线上地址：[gengminqi.com](https://gengminqi.com)
 
@@ -11,7 +11,7 @@
 - 可操作的加密、密文求值、解密演示
 - 正确性公式、噪声与 Bootstrapping
 - 适用场景与工程限制
-- 下一篇预告：MPC（安全多方计算）
+- 下一篇主题的匿名互动投票
 
 ## 本地运行
 

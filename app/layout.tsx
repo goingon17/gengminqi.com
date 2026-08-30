@@ -7,7 +7,7 @@ export const metadata: Metadata = {
   description: "从直觉、交互实验到数学原理，读懂全同态加密如何让机器在看不见数据的情况下完成计算。",
   openGraph: {
     title: "隐私，仍可计算｜gengminqi.com",
-    description: "一份写给好奇者的全同态加密交互手记。",
+    description: "用 AI，让计算机科学被看见和理解。Chapter 1：密码学。",
     type: "website",
     images: [
       {
@@ -21,7 +21,7 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "隐私，仍可计算｜gengminqi.com",
-    description: "一份写给好奇者的全同态加密交互手记。",
+    description: "用 AI，让计算机科学被看见和理解。Chapter 1：密码学。",
     images: ["/og.png"],
   },
 };

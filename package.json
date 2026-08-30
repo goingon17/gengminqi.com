@@ -10,6 +10,7 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "ioredis": "^5.11.1",
     "next": "latest",
     "react": "latest",
     "react-dom": "latest"
