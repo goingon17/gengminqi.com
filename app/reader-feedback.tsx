@@ -67,7 +67,7 @@ export function ReaderFeedback() {
     try {
       const next = await send({ action: "view" });
       setStage(stageFor(next.reader));
-      setMessage("已记下，你是其中一位");
+      setMessage("");
     } catch {
       setMessage("还差一步：请先连接数据库");
     } finally {
@@ -82,7 +82,7 @@ export function ReaderFeedback() {
     try {
       const next = await send({ action: "helpful", value: value === "yes" });
       setStage(stageFor(next.reader));
-      setMessage("谢谢你的判断");
+      setMessage("");
     } catch {
       setChoice(null);
       setMessage("投票未送达，请稍后再试");
@@ -118,7 +118,7 @@ export function ReaderFeedback() {
 
       {stage === "helpful" && (
         <div className="feedback-step feedback-helpful">
-          <span>有收获？</span>
+          <span aria-hidden="true" />
           <strong>你觉得鸽子知道自己会飞吗？</strong>
           <div className={`feedback-slider${choice ? ` is-${choice}` : ""}`} role="group" aria-label="这篇内容是否有帮助">
             <span className="slider-thumb" aria-hidden="true" />
@@ -130,7 +130,7 @@ export function ReaderFeedback() {
 
       {stage === "contact" && (
         <form className="feedback-step feedback-contact" onSubmit={(event) => void finish(event)}>
-          <span>保持联系 · 可选</span>
+          <span>联系我</span>
           <label>
             <strong>加个微信？</strong>
             <input value={contact} onChange={(event) => setContact(event.target.value)} maxLength={180} placeholder="邮箱 / 微信 / 其他方式" aria-label="联系方式，可选" />
@@ -151,7 +151,7 @@ export function ReaderFeedback() {
         </div>
       )}
 
-      <small className="feedback-message">{message}</small>
+      {message && <small className="feedback-message">{message}</small>}
     </div>
   );
 }
