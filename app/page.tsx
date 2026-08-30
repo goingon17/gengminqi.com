@@ -1,5 +1,5 @@
 import { FheLab } from "./fhe-lab";
-import { TopicVote } from "./topic-vote";
+import { ReaderFeedback } from "./reader-feedback";
 
 const concepts = [
   { number: "01", title: "在密文上运算", text: "数据在整个计算过程中都保持加密。计算者拿到的是密文，返回的也是密文。", glyph: "Enc(x) ⊕ Enc(y)" },
@@ -12,8 +12,8 @@ export default function Home() {
     <main>
       <header className="site-header">
         <a className="wordmark" href="#top" aria-label="gengminqi.com 首页"><span className="wordmark-dot" />gengminqi.com</a>
-        <nav aria-label="主导航"><a href="#intuition">直觉</a><a href="#lab">实验</a><a href="#mechanism">原理</a><a href="#participate">投票</a></nav>
-        <a className="header-index" href="#participate">CH. 01</a>
+        <nav aria-label="主导航"><a href="#intuition">直觉</a><a href="#lab">实验</a><a href="#mechanism">原理</a><a href="#reading">延伸</a></nav>
+        <a className="header-index" href="#reading">CH. 01</a>
       </header>
 
       <section className="hero" id="top">
@@ -73,14 +73,16 @@ export default function Home() {
         </div></div>
       </section>
 
-      <section className="vote-section" id="participate">
-        <div className="vote-lead">
-          <span className="section-label"><span>05</span> 共同决定</span>
-          <p className="chapter-signoff">Chapter 1 · 密码学</p>
-          <h2>让信任<br />有规则可循。</h2>
-          <p className="vote-intro">这一章还会继续。下一篇先解释哪一种密码学能力，由你来选。</p>
+      <section className="reading-section" id="reading">
+        <div className="reading-lead">
+          <span className="section-label"><span>05</span> 下一步</span>
+          <h2>密码学<br />让信任有规则可循</h2>
         </div>
-        <TopicVote />
+        <div className="reading-list">
+          <ReaderFeedback />
+          <a href="https://homomorphicencryption.org/" target="_blank" rel="noreferrer"><span>标准与资料</span><strong>Homomorphic Encryption Standard</strong><i>↗</i></a>
+          <div className="coming-soon"><span>下一篇</span><strong>MPC：秘密如何被共同计算</strong><i>soon</i></div>
+        </div>
       </section>
 
       <footer><div className="footer-mark"><span className="wordmark-dot" /> gengminqi.com</div><p>用 AI，让计算机科学被看见和理解。</p><p>© 2026 · Beijing / Everywhere</p></footer>

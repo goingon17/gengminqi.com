@@ -11,7 +11,7 @@
 - 可操作的加密、密文求值、解密演示
 - 正确性公式、噪声与 Bootstrapping
 - 适用场景与工程限制
-- 下一篇主题的匿名互动投票
+- 读者计数、内容反馈与可选联系方式
 
 ## 本地运行
 
@@ -30,4 +30,4 @@ pnpm typecheck
 pnpm build
 ```
 
-项目使用 Next.js App Router，可由 GitHub 推送触发 Vercel 自动部署。当前站点为静态科普内容，不需要数据库、环境变量或服务端 API。
+项目使用 Next.js App Router，可由 GitHub 推送触发 Vercel 自动部署。读者反馈由 `/api/feedback` 接收，并使用 Upstash Redis 持久化；Vercel 环境需提供 `UPSTASH_REDIS_REST_URL` 与 `UPSTASH_REDIS_REST_TOKEN`。
