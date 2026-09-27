@@ -2,13 +2,11 @@ node_modules
 .next
 .vercel
 out
-dist
-coverage
-.turbo
 .pnpm-store
 .DS_Store
 .env
 .env.*
 !.env.example
 *.tsbuildinfo
-public/vendor/jiff-client.js
+next-env.d.ts
+.claude

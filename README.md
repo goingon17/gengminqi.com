@@ -1,33 +1,31 @@
 # gengminqi.com
 
-一个用 AI 让计算机科学被看见和理解的科普网站。Chapter 1 从密码学开始，第一篇交互长文介绍 FHE（Fully Homomorphic Encryption，全同态加密）：用直觉、实验和必要的数学解释“机器如何在看不见数据的情况下完成计算”。
+个人名片网站。概念：**公钥 / Public Key** —— 微信号 `o65537` 里的 65537 是 RSA 最常用的公钥指数 e，所以这张名片就是一把可以公开的钥匙。
 
-线上地址：[gengminqi.com](https://gengminqi.com)
+- 可拖动、翻面、随鼠标 / 手机陀螺仪倾斜的 3D 全息名片（防伪纹 guilloche 镀膜，手机端竖版）
+- WebGL 全息等高线背景，跟随指针
+- 滚动时“解密”出现的文字
+- 作品列表（桌面端悬浮预览）、65537 的故事
+- 交换名片：访客留下联系方式，存入 Neon Postgres；`/contact.vcf` 一键存入通讯录
 
-## 当前内容
+## 修改内容
 
-- FHE 的核心直觉与信任边界
-- 传统加密计算和同态加密计算的流程对比
-- 可操作的加密、密文求值、解密演示
-- 正确性公式、噪声与 Bootstrapping
-- 适用场景与工程限制
-- 读者计数、内容反馈与可选联系方式
+所有个人信息都在 [`app/content.ts`](app/content.ts)。
 
 ## 本地运行
 
 ```bash
 pnpm install
+vercel env pull .env.local
 pnpm dev
 ```
 
-访问 `http://localhost:3000`。
+## 收件箱
+
+访客交换的名片在 `/inbox` 查看（HTTP Basic Auth，用户名随意，密码为环境变量 `INBOX_PASSWORD`，未设置时回退到 `APP_PASSWORD`）。数据表 `exchanged_cards` 在首次提交时自动创建。
 
 ## 验证
 
 ```bash
-pnpm lint
-pnpm typecheck
-pnpm build
+pnpm lint && pnpm typecheck && pnpm build
 ```
-
-项目使用 Next.js App Router，可由 GitHub 推送触发 Vercel 自动部署。读者反馈由 `/api/feedback` 接收，并使用 Neon Postgres 持久化；Vercel 环境需提供 `DATABASE_URL`。接口首次连接时会自动创建 `reader_feedback` 表。
