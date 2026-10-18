@@ -71,20 +71,16 @@ button:disabled {
     linear-gradient(to top, rgb(7 7 8 / 0.75), transparent 34%);
 }
 
-/* HUD fades in once the lights are on. */
+/* HUD fades in as the lamp warms up. */
 .top,
-.nav,
-.panel,
-.result {
-  opacity: 0;
-  transition: opacity 1.4s ease 1s;
+.hint {
+  animation: fade 1.6s ease 0.8s both;
 }
 
-.casino.in .top,
-.casino.in .nav,
-.casino.in .panel,
-.casino.in .result {
-  opacity: 1;
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
 }
 
 /* ---------- Top bar ---------- */
@@ -109,16 +105,6 @@ button:disabled {
   font: 500 11px/1 var(--mono);
   letter-spacing: 0.22em;
   text-transform: uppercase;
-}
-
-.mark i {
-  margin-left: 12px;
-  padding-left: 12px;
-  border-left: 1px solid var(--line);
-  font: 400 12px/1 var(--sans);
-  font-style: normal;
-  letter-spacing: 0;
-  color: var(--muted);
 }
 
 .top-right {
@@ -146,7 +132,7 @@ button:disabled {
 }
 
 .icon,
-.nav {
+.back {
   display: grid;
   place-items: center;
   border: 1px solid var(--line);
@@ -166,7 +152,7 @@ button:disabled {
 }
 
 .icon svg,
-.nav svg {
+.back svg {
   width: 16px;
   height: 16px;
   fill: none;
@@ -178,64 +164,37 @@ button:disabled {
 
 @media (hover: hover) {
   .icon:hover,
-  .nav:not(:disabled):hover {
+  .back:hover {
     border-color: rgb(235 230 220 / 0.5);
   }
 }
 
-/* ---------- Table switching ---------- */
+/* ---------- Result (shown in the panel title slot) ---------- */
 
-.nav {
-  position: absolute;
-  top: 46%;
-  width: 46px;
-  height: 46px;
-  padding: 0;
-  translate: 0 -50%;
+.title {
+  min-height: 58px;
+  align-content: end;
 }
 
-.nav.prev {
-  left: var(--gutter);
-}
-
-.nav.next {
-  right: var(--gutter);
-}
-
-.casino.in .nav:disabled {
-  opacity: 0.15;
-  transition-delay: 0s;
-}
-
-/* ---------- Result ---------- */
-
-.result {
-  position: absolute;
-  bottom: 292px;
-  left: 0;
-  right: 0;
-  display: flex;
-  justify-content: center;
-  pointer-events: none;
-  transition-delay: 0s;
+.title h1 {
+  animation: fade 0.5s ease both;
 }
 
 .result-in {
   display: grid;
   justify-items: center;
-  gap: 8px;
-  animation: result 3.2s var(--ease) both;
+  gap: 6px;
+  animation: result 0.7s var(--ease) both;
 }
 
 .result-in b {
-  font: 200 clamp(44px, 8vw, 84px) / 1 var(--sans);
-  letter-spacing: -0.03em;
+  font: 250 clamp(36px, 5vw, 46px) / 1 var(--sans);
+  letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
 }
 
 .result-in.win b {
-  color: var(--fg);
-  text-shadow: 0 0 40px rgb(255 226 170 / 0.35);
+  text-shadow: 0 0 32px rgb(255 226 170 / 0.4);
 }
 
 .result-in.lose b {
@@ -243,32 +202,23 @@ button:disabled {
 }
 
 .result-in span {
-  font: 12px/1 var(--mono);
+  font: 11px/1 var(--mono);
   letter-spacing: 0.16em;
   color: var(--muted);
 }
 
 @keyframes result {
-  0% {
+  from {
     opacity: 0;
-    transform: translateY(14px);
-    filter: blur(8px);
-  }
-  14%,
-  78% {
-    opacity: 1;
-    transform: none;
-    filter: none;
-  }
-  100% {
-    opacity: 0;
-    transform: translateY(-8px);
+    transform: translateY(10px);
+    filter: blur(6px);
   }
 }
 
 /* ---------- Bottom panel ---------- */
 
 .panel {
+  animation: panel 0.9s var(--ease) 0.25s both;
   position: absolute;
   left: 50%;
   bottom: 0;
@@ -434,122 +384,10 @@ button:disabled {
   text-align: center;
 }
 
-/* ---------- Intro ---------- */
-
-.intro {
-  position: absolute;
-  inset: 0;
-  z-index: 10;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background:
-    radial-gradient(60% 50% at 50% -8%, rgb(255 240 220 / 0.08), transparent 70%),
-    var(--bg);
-  transition:
-    opacity 1.6s ease,
-    visibility 0s 1.6s;
-}
-
-.intro.gone {
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-}
-
-.intro-in {
-  display: grid;
-  justify-items: center;
-  gap: 20px;
-  text-align: center;
-  animation: rise 1.6s var(--ease) both;
-}
-
-.intro.gone .intro-in {
-  transform: scale(1.04);
-  filter: blur(6px);
-  transition:
-    transform 1.6s var(--ease),
-    filter 1.6s;
-}
-
-.intro-k {
-  margin: 0;
-  font: 11px/1 var(--mono);
-  letter-spacing: 0.3em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-.intro h2 {
-  margin: 0;
-  font: 200 clamp(60px, 12vw, 150px) / 0.9 var(--sans);
-  letter-spacing: -0.045em;
-}
-
-.intro-sub {
-  margin: 0 0 12px;
-  font-size: 15px;
-  letter-spacing: 0.2em;
-  color: var(--muted);
-}
-
-.intro button {
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-  height: 52px;
-  padding: 0 30px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: none;
-  font: 500 12px/1 var(--mono);
-  letter-spacing: 0.3em;
-  text-transform: uppercase;
-  transition:
-    background 0.4s var(--ease),
-    color 0.4s var(--ease),
-    border-color 0.4s;
-}
-
-.intro button span {
-  font: 13px/1 var(--sans);
-  letter-spacing: 0.1em;
-  color: var(--muted);
-  transition: color 0.4s;
-}
-
-.intro button:hover {
-  border-color: var(--fg);
-  background: var(--fg);
-  color: var(--bg);
-}
-
-.intro button:hover span {
-  color: rgb(7 7 8 / 0.6);
-}
-
-.intro .fine {
-  margin-top: 28px;
-  max-width: 22em;
-}
-
-@keyframes rise {
-  from {
-    opacity: 0;
-    transform: translateY(16px);
-    filter: blur(10px);
-  }
-}
-
 @media (max-width: 640px) {
   .mark {
     font-size: 10px;
     letter-spacing: 0.16em;
-  }
-
-  .mark i {
-    display: none;
   }
 
   .panel {
@@ -562,15 +400,6 @@ button:disabled {
     line-height: 38px;
   }
 
-  .nav {
-    top: 44%;
-    width: 40px;
-    height: 40px;
-  }
-
-  .result {
-    bottom: 270px;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -580,4 +409,54 @@ button:disabled {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ---------- Table overview & focus ---------- */
+
+@keyframes panel {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+}
+
+.back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 16px 0 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+}
+
+.hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: max(18px, env(safe-area-inset-bottom));
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  pointer-events: none;
+  transition: opacity 0.5s ease;
+}
+
+.hint.hide {
+  opacity: 0;
+}
+
+.hint span {
+  font: 12px/1 var(--mono);
+  letter-spacing: 0.24em;
+  color: var(--fg);
+  animation: fade 0.5s ease both;
+}
+
+.action.wide {
+  min-width: 220px;
+  font-family: var(--sans);
+  font-size: 15px;
+  letter-spacing: 0.12em;
 }

@@ -1,6 +1,6 @@
 # gengminqi.com — The Quiet Casino
 
-三张桌子，一盏灯。一个极简的 3D 虚拟赌场，手机和电脑都能玩。
+一张赌桌，一盏灯。首页就是一张 3D 赌桌：最前面是一张名片（微信 o65537），旁边是一摞代表你余额的筹码，后面摆着轮盘、骰子和老虎机。点击任何物件，镜头和灯光会一起推近；点空白处或按 Esc 回到桌面。手机和电脑都能访问（竖屏会换成一张长桌）。
 
 **只是游戏**：筹码是存在浏览器本地的虚拟数字，没有充值、提现或任何真实货币交易。
 
@@ -12,7 +12,7 @@
 
 ## 技术
 
-Next.js · React Three Fiber · drei · cannon-es。规则在 [`app/casino/rules.ts`](app/casino/rules.ts)，场景在 [`app/casino/Scene.tsx`](app/casino/Scene.tsx)。
+Next.js · React Three Fiber · drei · cannon-es。规则在 [`app/casino/rules.ts`](app/casino/rules.ts)，桌面布局与镜头在 [`app/casino/Scene.tsx`](app/casino/Scene.tsx)，名片在 [`app/casino/Card.tsx`](app/casino/Card.tsx)。
 
 ```bash
 pnpm install

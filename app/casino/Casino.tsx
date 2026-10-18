@@ -2,14 +2,16 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { WECHAT } from "./Card";
 import { BETS, dicePayout, describe, GAMES, randomInt, REEL, roulettePayout, slotsPayout, START_BALANCE, type GameId } from "./rules";
-import type { Rounds } from "./Scene";
+import type { Focus, Rounds } from "./Scene";
 import { chime, chip, setMuted, unlockAudio } from "./sound";
 
 const Scene = dynamic(() => import("./Scene"), { ssr: false });
 
 const STORE = "gmq-casino-v1";
 const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
+const LABEL: Record<Focus, string> = { card: "名片 · Card", roulette: "轮盘 · Roulette", dice: "骰宝 · Sic Bo", slots: "老虎机 · Slots" };
 
 type Result = { id: number; delta: number; detail: string };
 type Pending = { game: GameId; option: string; bet: number; target?: number; stops?: number[] };
@@ -20,6 +22,22 @@ function load() {
     if (s && typeof s.balance === "number") return s as { balance: number; muted: boolean };
   } catch {}
   return null;
+}
+
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.cssText = "position:fixed;opacity:0";
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    area.remove();
+    return ok;
+  }
 }
 
 function useCountUp(value: number) {
@@ -43,21 +61,22 @@ function useCountUp(value: number) {
 }
 
 export function Casino() {
-  const [entered, setEntered] = useState(false);
-  const [active, setActive] = useState(0);
+  const [focus, setFocus] = useState<Focus | null>(null);
+  const [hover, setHover] = useState<Focus | null>(null);
   const [balance, setBalance] = useState(START_BALANCE);
   const [betIdx, setBetIdx] = useState(1);
   const [options, setOptions] = useState<Record<GameId, string>>({ roulette: "red", dice: "big", slots: "line" });
   const [playing, setPlaying] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
   const [muted, setMute] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [rounds, setRounds] = useState<Rounds>({ roulette: null, dice: null, slots: null });
   const [glow, setGlow] = useState(0);
   const pending = useRef<Pending | null>(null);
   const ready = useRef(false);
   const shown = useCountUp(balance);
 
-  const game = GAMES[active];
+  const game = focus && focus !== "card" ? GAMES.find((g) => g.id === focus)! : null;
   const bet = BETS[betIdx];
   const broke = balance < BETS[0] && !playing;
 
@@ -98,17 +117,20 @@ export function Casino() {
     setPlaying(false);
   }, []);
 
-  const go = useCallback(
-    (dir: number) => {
-      if (playing) return;
-      setActive((a) => (a + dir + GAMES.length) % GAMES.length);
-      setResult(null);
-    },
-    [playing],
-  );
+  const pick = useCallback((id: Focus) => {
+    unlockAudio();
+    chip();
+    setHover(null);
+    setFocus(id);
+  }, []);
+
+  const back = useCallback(() => {
+    setFocus(null);
+    setCopied(false);
+  }, []);
 
   const play = useCallback(() => {
-    if (playing || !entered) return;
+    if (playing || !game) return;
     if (balance < bet) {
       setResult({ id: Date.now(), delta: 0, detail: "筹码不足，调低下注" });
       return;
@@ -130,7 +152,7 @@ export function Casino() {
       p.stops = [0, 0, 0].map(() => randomInt(REEL.length));
       setRounds((r) => ({ ...r, slots: { id, stops: p.stops! } }));
     }
-  }, [playing, entered, balance, bet, game.id, options]);
+  }, [playing, game, balance, bet, options]);
 
   const onRouletteDone = useCallback(() => {
     const p = pending.current;
@@ -138,10 +160,13 @@ export function Casino() {
     settle(roulettePayout(p.option, p.target), describe("roulette", p.target));
   }, [settle]);
 
-  const onDiceDone = useCallback((faces: number[]) => {
-    const p = pending.current;
-    if (p) settle(dicePayout(p.option, faces), describe("dice", faces));
-  }, [settle]);
+  const onDiceDone = useCallback(
+    (faces: number[]) => {
+      const p = pending.current;
+      if (p) settle(dicePayout(p.option, faces), describe("dice", faces));
+    },
+    [settle],
+  );
 
   const onSlotsDone = useCallback(() => {
     const stops = pending.current?.stops;
@@ -150,36 +175,26 @@ export function Casino() {
     settle(mult, mult >= 2 ? "三连" : mult > 0 ? "两连" : "");
   }, [settle]);
 
-  // Keyboard: arrows switch tables, space / enter plays.
+  // Keyboard: Escape returns to the table, space / enter plays.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!entered || (e.target as HTMLElement).closest("button")) return;
-      if (e.key === "ArrowLeft") go(-1);
-      else if (e.key === "ArrowRight") go(1);
-      else if (e.key === " " || e.key === "Enter") {
+      if (e.key === "Escape") back();
+      else if ((e.key === " " || e.key === "Enter") && game && !(e.target as HTMLElement).closest("button")) {
         e.preventDefault();
         play();
       }
     };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
-  }, [entered, go, play]);
+  }, [back, play, game]);
 
-  // Horizontal swipe on the scene switches tables.
-  const swipe = useRef<{ x: number; y: number } | null>(null);
-  const onDown = (e: React.PointerEvent) => (swipe.current = { x: e.clientX, y: e.clientY });
-  const onUp = (e: React.PointerEvent) => {
-    const s = swipe.current;
-    swipe.current = null;
-    if (!s) return;
-    const dx = e.clientX - s.x;
-    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(e.clientY - s.y) * 1.5) go(dx < 0 ? 1 : -1);
-  };
-
-  const enter = () => {
+  const copy = async () => {
     unlockAudio();
-    chip();
-    setEntered(true);
+    if (await copyText(WECHAT)) {
+      chip();
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2200);
+    }
   };
 
   const toggleMute = () => {
@@ -190,16 +205,34 @@ export function Casino() {
   };
 
   return (
-    <div className={`casino${entered ? " in" : ""}${playing ? " busy" : ""}`}>
-      <div className="stage" onPointerDown={onDown} onPointerUp={onUp}>
-        <Scene active={active} lit={entered} glow={glow} rounds={rounds} onRouletteDone={onRouletteDone} onDiceDone={onDiceDone} onSlotsDone={onSlotsDone} />
+    <div className={`casino${focus ? " focused" : ""}${playing ? " busy" : ""}`}>
+      <div className="stage">
+        <Scene
+          focus={focus}
+          glow={glow}
+          balance={balance}
+          rounds={rounds}
+          onPick={pick}
+          onHover={setHover}
+          onBack={back}
+          onRouletteDone={onRouletteDone}
+          onDiceDone={onDiceDone}
+          onSlotsDone={onSlotsDone}
+        />
       </div>
       <div className="vignette" aria-hidden="true" />
 
       <header className="top">
-        <span className="mark">
-          The Quiet Casino<i>静</i>
-        </span>
+        {focus ? (
+          <button type="button" className="back" onClick={back}>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M15 5 8 12l7 7" />
+            </svg>
+            桌面
+          </button>
+        ) : (
+          <span className="mark">gengminqi.com</span>
+        )}
         <div className="top-right">
           <span className="balance" aria-label={`余额 ${fmt(balance)} 筹码`}>
             <b>{fmt(shown)}</b>
@@ -221,103 +254,91 @@ export function Casino() {
         </div>
       </header>
 
-      <button type="button" className="nav prev" onClick={() => go(-1)} disabled={playing} aria-label="上一张桌子">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M15 5 8 12l7 7" />
-        </svg>
-      </button>
-      <button type="button" className="nav next" onClick={() => go(1)} disabled={playing} aria-label="下一张桌子">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="m9 5 7 7-7 7" />
-        </svg>
-      </button>
-
-      <div className="result" aria-live="polite">
-        {result && (
-          <div key={result.id} className={`result-in ${result.delta > 0 ? "win" : result.delta < 0 ? "lose" : ""}`}>
-            {result.delta !== 0 && (
-              <b>
-                {result.delta > 0 ? "+" : "−"}
-                {fmt(Math.abs(result.delta))}
-              </b>
-            )}
-            {result.detail && <span>{result.detail}</span>}
-          </div>
-        )}
-      </div>
-
-      <section className="panel" aria-label="游戏控制">
-        <div className="title">
-          <span className="count">
-            {String(active + 1).padStart(2, "0")} / {String(GAMES.length).padStart(2, "0")}
-          </span>
-          <h1>
-            {game.name}
-            <span>{game.zh}</span>
-          </h1>
-        </div>
-
-        <div className="options" role="radiogroup" aria-label="下注选项">
-          {game.options.map((o) => (
-            <button
-              key={o.id}
-              type="button"
-              role="radio"
-              aria-checked={options[game.id] === o.id}
-              className={options[game.id] === o.id ? "on" : ""}
-              disabled={playing}
-              onClick={() => {
-                chip();
-                setOptions((s) => ({ ...s, [game.id]: o.id }));
-              }}
-            >
-              {o.label}
-              <small>{o.hint}</small>
-            </button>
-          ))}
-        </div>
-
-        <div className="controls">
-          <div className="bet" aria-label="下注金额">
-            <button type="button" onClick={() => setBetIdx((i) => Math.max(0, i - 1))} disabled={playing || betIdx === 0} aria-label="减少下注">
-              −
-            </button>
-            <span>
-              <small>bet</small>
-              {bet}
-            </span>
-            <button type="button" onClick={() => setBetIdx((i) => Math.min(BETS.length - 1, i + 1))} disabled={playing || betIdx === BETS.length - 1} aria-label="增加下注">
-              +
-            </button>
-          </div>
-          {broke ? (
-            <button type="button" className="action refill" onClick={() => setBalance(START_BALANCE)}>
-              再领 1,000
-            </button>
-          ) : (
-            <button type="button" className="action" onClick={play} disabled={playing}>
-              <span>{playing ? "···" : game.action}</span>
-            </button>
-          )}
-        </div>
+      {/* Overview: the table itself is the menu. */}
+      <div className={`hint${focus ? " hide" : ""}`} aria-hidden={!!focus}>
+        <span key={hover ?? "none"}>{hover ? LABEL[hover] : "轻触桌上的物件"}</span>
         <p className="fine">虚拟筹码 · 仅供娱乐 · 不涉及任何真实货币</p>
-      </section>
-
-      <div className={`intro${entered ? " gone" : ""}`} aria-hidden={entered}>
-        <div className="intro-in">
-          <p className="intro-k">gengminqi.com</p>
-          <h2>
-            The Quiet
-            <br />
-            Casino
-          </h2>
-          <p className="intro-sub">三张桌子，一盏灯。</p>
-          <button type="button" onClick={enter} tabIndex={entered ? -1 : 0}>
-            Enter <span>进入</span>
-          </button>
-          <p className="fine">虚拟筹码，仅供娱乐。不提供充值、提现或任何真实货币交易。</p>
-        </div>
       </div>
+
+      {focus === "card" && (
+        <section className="panel" aria-label="名片">
+          <div className="controls">
+            <button type="button" className="action wide" onClick={copy}>
+              <span>{copied ? "已复制 ✓" : "复制微信号"}</span>
+            </button>
+          </div>
+          <p className="fine">打开微信 → 添加朋友 → 粘贴搜索</p>
+        </section>
+      )}
+
+      {game && (
+        <section className="panel" aria-label="游戏控制" key={game.id}>
+          {/* The outcome briefly takes the title's place. */}
+          <div className="title" aria-live="polite">
+            {result ? (
+              <div key={result.id} className={`result-in ${result.delta > 0 ? "win" : result.delta < 0 ? "lose" : ""}`}>
+                {result.delta !== 0 && (
+                  <b>
+                    {result.delta > 0 ? "+" : "−"}
+                    {fmt(Math.abs(result.delta))}
+                  </b>
+                )}
+                {result.detail && <span>{result.detail}</span>}
+              </div>
+            ) : (
+              <h1 key="name">
+                {game.name}
+                <span>{game.zh}</span>
+              </h1>
+            )}
+          </div>
+
+          <div className="options" role="radiogroup" aria-label="下注选项">
+            {game.options.map((o) => (
+              <button
+                key={o.id}
+                type="button"
+                role="radio"
+                aria-checked={options[game.id] === o.id}
+                className={options[game.id] === o.id ? "on" : ""}
+                disabled={playing}
+                onClick={() => {
+                  chip();
+                  setOptions((s) => ({ ...s, [game.id]: o.id }));
+                }}
+              >
+                {o.label}
+                <small>{o.hint}</small>
+              </button>
+            ))}
+          </div>
+
+          <div className="controls">
+            <div className="bet" aria-label="下注金额">
+              <button type="button" onClick={() => setBetIdx((i) => Math.max(0, i - 1))} disabled={playing || betIdx === 0} aria-label="减少下注">
+                −
+              </button>
+              <span>
+                <small>bet</small>
+                {bet}
+              </span>
+              <button type="button" onClick={() => setBetIdx((i) => Math.min(BETS.length - 1, i + 1))} disabled={playing || betIdx === BETS.length - 1} aria-label="增加下注">
+                +
+              </button>
+            </div>
+            {broke ? (
+              <button type="button" className="action refill" onClick={() => setBalance(START_BALANCE)}>
+                再领 1,000
+              </button>
+            ) : (
+              <button type="button" className="action" onClick={play} disabled={playing}>
+                <span>{playing ? "···" : game.action}</span>
+              </button>
+            )}
+          </div>
+          <p className="fine">虚拟筹码 · 仅供娱乐 · 不涉及任何真实货币</p>
+        </section>
+      )}
     </div>
   );
 }

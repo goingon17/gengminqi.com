@@ -1,26 +1,16 @@
 "use client";
 
 import { Environment, Lightformer, RoundedBox } from "@react-three/drei";
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { useEffect, useMemo, useRef } from "react";
+import { Canvas, useFrame, useThree, type ThreeEvent } from "@react-three/fiber";
+import { useMemo, useRef } from "react";
 import * as THREE from "three";
+import { Card, ChipStack } from "./Card";
 import { Dice } from "./Dice";
 import { COLORS, materials } from "./materials";
 import { Roulette } from "./Roulette";
 import { Slots } from "./Slots";
 
-export const SPACING = 8;
-const tmp = { pos: new THREE.Vector3(), look: new THREE.Vector3() };
-const PLINTH_H = 1;
-
-// Camera pose per station, relative to the station centre.
-// Targets sit below/in front of each object so it lands in the upper part of the
-// screen, clear of the control panel.
-const POSES = [
-  { pos: [0, 7.6, 7.6], look: [0, 0.55, 1.0] },
-  { pos: [0, 7.4, 7.0], look: [0, 0.35, 0.75] },
-  { pos: [0, 3.6, 9.4], look: [0, 1.45, 0] },
-] as const;
+export type Focus = "card" | "roulette" | "dice" | "slots";
 
 export type Rounds = {
   roulette: { id: number; target: number } | null;
@@ -28,38 +18,91 @@ export type Rounds = {
   slots: { id: number; stops: number[] } | null;
 };
 
-type Props = {
-  active: number;
-  lit: boolean;
-  glow: number;
-  rounds: Rounds;
-  onRouletteDone: () => void;
-  onDiceDone: (faces: number[]) => void;
-  onSlotsDone: () => void;
+const TABLE_H = 1;
+
+type Place = { x: number; z: number; s: number; ry?: number };
+type Layout = { table: [number, number]; items: Record<Focus | "chips", Place>; overview: { pos: [number, number, number]; look: [number, number, number] } };
+
+// Wide table for landscape screens, long table for phones held upright.
+const LANDSCAPE: Layout = {
+  table: [15.5, 9.4],
+  items: {
+    card: { x: -0.2, z: 2.55, s: 1, ry: -0.04 },
+    chips: { x: 2.05, z: 2.8, s: 1 },
+    roulette: { x: 0, z: -1.6, s: 0.88 },
+    dice: { x: -4.7, z: 0.9, s: 0.68 },
+    slots: { x: 4.75, z: -0.1, s: 0.6, ry: -0.18 },
+  },
+  overview: { pos: [0, 13.2, 11.6], look: [0, 0.6, 0.1] },
 };
 
-function Rig({ active, lit }: { active: number; lit: boolean }) {
+const PORTRAIT: Layout = {
+  table: [8.6, 14.2],
+  items: {
+    card: { x: 0.45, z: 4.1, s: 1, ry: -0.04 },
+    chips: { x: -2.35, z: 4.6, s: 1 },
+    roulette: { x: 0, z: -3.6, s: 0.86 },
+    dice: { x: -2.0, z: 1.0, s: 0.62 },
+    slots: { x: 2.05, z: 0.5, s: 0.55, ry: -0.12 },
+  },
+  overview: { pos: [0, 22.5, 13.5], look: [0, 0.6, 0.15] },
+};
+
+// Camera pose for each focused object, in that object's (unscaled) frame. Targets sit
+// below/in front of the object so it lands above the control panel.
+const POSES: Record<Focus, { pos: [number, number, number]; look: [number, number, number]; spot: number }> = {
+  card: { pos: [0, 4.9, 3.5], look: [0, 0, 0.62], spot: 0.2 },
+  roulette: { pos: [0, 7.6, 7.6], look: [0, 0.55, 1.0], spot: 0.3 },
+  dice: { pos: [0, 7.4, 7.0], look: [0, 0.35, 0.75], spot: 0.26 },
+  slots: { pos: [0, 5.0, 10.0], look: [0, 0.6, 0.3], spot: 0.26 },
+};
+
+function useLayout() {
+  const { size } = useThree();
+  return size.width / size.height < 0.85 ? PORTRAIT : LANDSCAPE;
+}
+
+const Y = new THREE.Vector3(0, 1, 0);
+const tmp = { pos: new THREE.Vector3(), look: new THREE.Vector3(), v: new THREE.Vector3(), o: new THREE.Vector3() };
+
+function toWorld(p: Place, local: readonly number[], out: THREE.Vector3) {
+  out.set(local[0], local[1], local[2]).multiplyScalar(p.s);
+  out.applyAxisAngle(Y, p.ry ?? 0);
+  return out.add(tmp.o.set(p.x, TABLE_H, p.z));
+}
+
+function Rig({ focus }: { focus: Focus | null }) {
   const { camera, size } = useThree();
-  const look = useRef(new THREE.Vector3(0, 6, -4));
+  const layout = useLayout();
+  const look = useRef(new THREE.Vector3(0, 0, 0));
   const pointer = useRef({ x: 0, y: 0 });
+  const started = useRef(false);
+
   useFrame((state, dt) => {
-    const pose = POSES[active];
-    const x = (active - 1) * SPACING;
-    // Portrait screens: pull back so the object still fits the width.
-    const aspect = size.width / size.height;
-    const pull = aspect < 1 ? Math.min(1.9, (1 / aspect) ** 0.72) : 1;
     pointer.current.x += (state.pointer.x - pointer.current.x) * 0.04;
     pointer.current.y += (state.pointer.y - pointer.current.y) * 0.04;
-    if (lit) {
-      tmp.look.set(x + pose.look[0], pose.look[1], pose.look[2]);
-      tmp.pos.set(pose.pos[0], pose.pos[1] - pose.look[1], pose.pos[2] - pose.look[2]).multiplyScalar(pull).add(tmp.look);
-      tmp.pos.x += pointer.current.x * 0.35;
-      tmp.pos.y += pointer.current.y * 0.2;
+    if (focus) {
+      const p = layout.items[focus];
+      const pose = POSES[focus];
+      // Upright screens: pull back so the object still fits the width.
+      const aspect = size.width / size.height;
+      // The card is wide and flat, so it needs to keep its full width in view.
+      const pull = focus === "card" ? Math.max(1, 1.25 / aspect) : aspect < 1 ? Math.min(1.9, (1 / aspect) ** 0.72) : 1;
+      toWorld(p, pose.look, tmp.look);
+      toWorld(p, pose.pos, tmp.pos).sub(tmp.look).multiplyScalar(pull).add(tmp.look);
     } else {
-      tmp.look.set(0, 1.5, 0);
-      tmp.pos.set(0, 10, 18);
+      tmp.look.set(...layout.overview.look);
+      tmp.pos.set(...layout.overview.pos);
     }
-    const k = 1 - Math.exp(-dt * (lit ? 2.2 : 8));
+    tmp.pos.x += pointer.current.x * 0.3;
+    tmp.pos.y += pointer.current.y * 0.18;
+    if (!started.current) {
+      // First frame: start high above and drift down onto the table.
+      started.current = true;
+      camera.position.copy(tmp.pos).add(tmp.v.set(0, 7, 5));
+      look.current.copy(tmp.look);
+    }
+    const k = 1 - Math.exp(-dt * 2.1);
     camera.position.lerp(tmp.pos, k);
     look.current.lerp(tmp.look, k);
     camera.lookAt(look.current);
@@ -67,79 +110,51 @@ function Rig({ active, lit }: { active: number; lit: boolean }) {
   return null;
 }
 
-const beamVertex = `
-varying vec3 vNormal;
-varying vec3 vView;
-varying float vAlong;
-void main() {
-  vAlong = uv.y;
-  vec4 wp = modelMatrix * vec4(position, 1.0);
-  vNormal = normalize(mat3(modelMatrix) * normal);
-  vView = normalize(cameraPosition - wp.xyz);
-  gl_Position = projectionMatrix * viewMatrix * wp;
-}`;
-
-const beamFragment = `
-uniform float uLevel;
-varying vec3 vNormal;
-varying vec3 vView;
-varying float vAlong;
-void main() {
-  float facing = pow(abs(dot(vNormal, vView)), 2.2);
-  float fade = pow(vAlong, 1.6) * smoothstep(0.0, 0.25, 1.0 - vAlong + 0.02);
-  gl_FragColor = vec4(vec3(1.0, 0.94, 0.86), facing * fade * 0.1 * uLevel);
-}`;
-
-const UP = new THREE.Vector3(0, 1, 0);
-const LIGHT_Y = 9.5;
-const LIGHT_Z = 2.5;
-
-function Lights({ active, lit, glow }: { active: number; lit: boolean; glow: number }) {
+function Lights({ focus, glow }: { focus: Focus | null; glow: number }) {
+  const layout = useLayout();
   const spot = useRef<THREE.SpotLight>(null);
-  const fill = useRef<THREE.AmbientLight>(null);
-  const beam = useRef<THREE.Mesh>(null);
   const target = useMemo(() => new THREE.Object3D(), []);
   const level = useRef(0);
-  const boost = useRef(0);
-  const uniforms = useMemo(() => ({ uLevel: { value: 0 } }), []);
-  const beamGeo = useMemo(() => {
-    const len = Math.hypot(LIGHT_Y - PLINTH_H, LIGHT_Z);
-    const g = new THREE.ConeGeometry(Math.tan(0.36) * len * 0.82, len, 64, 1, true);
-    g.translate(0, -len / 2, 0); // apex at the origin (the lamp)
-    return g;
-  }, []);
-
-  useEffect(() => {
-    if (glow) boost.current = 1;
-  }, [glow]);
+  const boost = useRef({ glow: 0, value: 0 });
+  const want = useRef(new THREE.Vector3());
 
   useFrame((_, dt) => {
     const s = spot.current!;
-    const x = (active - 1) * SPACING;
-    level.current += ((lit ? 1 : 0) - level.current) * (1 - Math.exp(-dt * 1.2));
-    boost.current *= Math.exp(-dt * 1.6);
-    s.position.x += (x - s.position.x) * (1 - Math.exp(-dt * 2.4));
-    target.position.set(s.position.x, PLINTH_H, 0);
+    const b = boost.current;
+    if (glow !== b.glow) {
+      b.glow = glow;
+      b.value = 1;
+    }
+    b.value *= Math.exp(-dt * 1.6);
+    level.current += (1 - level.current) * (1 - Math.exp(-dt * 0.9));
+    const k = 1 - Math.exp(-dt * 2.2);
+    let angle: number;
+    if (focus) {
+      const p = layout.items[focus];
+      want.current.set(p.x, 9.4, p.z + 2.4);
+      target.position.set(p.x, TABLE_H, p.z);
+      angle = POSES[focus].spot * (0.6 + 0.4 * p.s) * 1.25;
+    } else {
+      want.current.set(0, 15, 3.5);
+      target.position.set(0, TABLE_H, 0.2);
+      angle = 0.52;
+    }
+    s.position.lerp(want.current, k);
+    s.angle += (angle - s.angle) * k;
     target.updateMatrixWorld();
-    s.intensity = 260 * level.current * (1 + 0.7 * boost.current);
-    fill.current!.intensity = 0.05 + 0.1 * level.current;
-    const b = beam.current!;
-    b.position.copy(s.position);
-    const dir = s.position.clone().sub(target.position).normalize();
-    b.quaternion.setFromUnitVectors(UP, dir);
-    (b.material as THREE.ShaderMaterial).uniforms.uLevel.value = level.current * (1 + 0.8 * boost.current);
+    s.intensity = (focus ? 300 : 620) * level.current * (1 + 0.7 * b.value);
   });
 
   return (
     <>
-      <ambientLight ref={fill} intensity={0.05} />
+      <ambientLight intensity={0.12} />
       <primitive object={target} />
       <spotLight
         ref={spot}
-        position={[-SPACING, LIGHT_Y, LIGHT_Z]}
+        position={[0, 15, 3.5]}
         target={target}
-        angle={0.36}
-        penumbra={0.85}
+        angle={0.52}
+        penumbra={0.9}
         decay={2}
         castShadow
         shadow-mapSize={[2048, 2048]}
@@ -147,69 +162,148 @@ function Lights({ active, lit, glow }: { active: number; lit: boolean; glow: num
         shadow-normalBias={0.02}
         color="#fff4e6"
       />
-      <mesh ref={beam} geometry={beamGeo} renderOrder={10}>
-        <shaderMaterial
-          vertexShader={beamVertex}
-          fragmentShader={beamFragment}
-          uniforms={uniforms}
-          transparent
-          depthWrite={false}
-          blending={THREE.AdditiveBlending}
-          side={THREE.DoubleSide}
-        />
-      </mesh>
-      {/* Faint cool rim so the dark tables keep their silhouettes. */}
-      <directionalLight position={[0, 6, -10]} intensity={0.25} color="#9fb2c8" />
+      {/* Faint cool rim so objects outside the light keep their silhouettes. */}
+      <directionalLight position={[0, 6, -10]} intensity={0.3} color="#9fb2c8" />
     </>
   );
 }
 
-function Station({ index, children }: { index: number; children: React.ReactNode }) {
+function Table() {
   const m = materials();
+  const layout = useLayout();
+  const [w, d] = layout.table;
+  const inset = 0.32;
   return (
-    <group position={[(index - 1) * SPACING, 0, 0]}>
-      <RoundedBox args={[4.8, PLINTH_H, 4.8]} radius={0.04} smoothness={3} position-y={PLINTH_H / 2} material={m.plinth} castShadow receiveShadow />
-      <group position-y={PLINTH_H}>{children}</group>
+    <group>
+      <RoundedBox args={[w, TABLE_H, d]} radius={0.06} smoothness={3} position-y={TABLE_H / 2} material={m.plinth} castShadow receiveShadow />
+      <mesh position-y={TABLE_H + 0.002} rotation-x={-Math.PI / 2} material={m.felt} receiveShadow>
+        <planeGeometry args={[w - inset * 2, d - inset * 2]} />
+      </mesh>
+      {/* Brass inlay around the felt. */}
+      {[
+        [0, -(d / 2 - inset), w - inset * 2, 0.02],
+        [0, d / 2 - inset, w - inset * 2, 0.02],
+        [-(w / 2 - inset), 0, 0.02, d - inset * 2],
+        [w / 2 - inset, 0, 0.02, d - inset * 2],
+      ].map(([x, z, sx, sz], i) => (
+        <mesh key={i} position={[x, TABLE_H + 0.004, z]} material={m.brass}>
+          <boxGeometry args={[sx, 0.006, sz]} />
+        </mesh>
+      ))}
     </group>
   );
 }
 
+type ItemProps = {
+  id: Focus | "chips";
+  focus: Focus | null;
+  onPick?: (id: Focus) => void;
+  onHover?: (id: Focus | null) => void;
+  children: React.ReactNode;
+};
+
+// An object on the table: positioned by the layout, lifts slightly under the pointer.
+function Item({ id, focus, onPick, onHover, children }: ItemProps) {
+  const layout = useLayout();
+  const p = layout.items[id];
+  const lift = useRef<THREE.Group>(null);
+  const hovered = useRef(false);
+  const pickable = id !== "chips" && !!onPick && focus !== id;
+
+  useFrame((_, dt) => {
+    const g = lift.current!;
+    const goal = hovered.current && pickable ? 0.08 : 0;
+    g.position.y += (goal - g.position.y) * (1 - Math.exp(-dt * 10));
+  });
+
+  const over = (e: ThreeEvent<PointerEvent>) => {
+    if (!pickable) return;
+    e.stopPropagation();
+    hovered.current = true;
+    document.body.style.cursor = "pointer";
+    onHover?.(id as Focus);
+  };
+  const out = () => {
+    if (!hovered.current) return;
+    hovered.current = false;
+    document.body.style.cursor = "";
+    onHover?.(null);
+  };
+  const click = (e: ThreeEvent<MouseEvent>) => {
+    if (id === "chips") return;
+    e.stopPropagation();
+    if (!pickable) return;
+    out();
+    onPick?.(id as Focus);
+  };
+
+  return (
+    <group position={[p.x, TABLE_H, p.z]} rotation-y={p.ry ?? 0} scale={p.s} onPointerOver={over} onPointerOut={out} onClick={click}>
+      <group ref={lift}>{children}</group>
+    </group>
+  );
+}
+
+type Props = {
+  focus: Focus | null;
+  glow: number;
+  balance: number;
+  rounds: Rounds;
+  onPick: (id: Focus) => void;
+  onHover: (id: Focus | null) => void;
+  onBack: () => void;
+  onRouletteDone: () => void;
+  onDiceDone: (faces: number[]) => void;
+  onSlotsDone: () => void;
+};
+
 export default function Scene(props: Props) {
+  const { focus, onPick, onHover, onBack } = props;
+  const item = { focus, onPick, onHover };
+  const back = () => focus && onBack();
   return (
     <Canvas
       shadows="soft"
       dpr={[1, 1.75]}
-      camera={{ fov: 32, near: 0.1, far: 80, position: [0, 10, 18] }}
+      camera={{ fov: 32, near: 0.1, far: 90, position: [0, 20, 18] }}
       gl={{ antialias: true, powerPreference: "high-performance" }}
       onCreated={({ gl }) => {
         gl.toneMapping = THREE.ACESFilmicToneMapping;
         gl.toneMappingExposure = 1.05;
       }}
+      onPointerMissed={back}
     >
       <color attach="background" args={[COLORS.bg]} />
-      <fog attach="fog" args={[COLORS.bg, 14, 34]} />
+      <fog attach="fog" args={[COLORS.bg, 22, 48]} />
       <Environment resolution={256} environmentIntensity={0.35}>
         <Lightformer form="rect" intensity={3} position={[0, 6, 2]} rotation-x={Math.PI / 2} scale={[8, 3, 1]} />
         <Lightformer form="rect" intensity={1} color="#c9d6ff" position={[-6, 2, -4]} scale={[4, 6, 1]} />
         <Lightformer form="ring" intensity={1.5} color="#ffe2b8" position={[6, 3, 3]} scale={2} />
       </Environment>
-      <Rig active={props.active} lit={props.lit} />
-      <Lights active={props.active} lit={props.lit} glow={props.glow} />
-      <mesh rotation-x={-Math.PI / 2} receiveShadow>
-        <planeGeometry args={[120, 120]} />
+      <Rig focus={focus} />
+      <Lights focus={focus} glow={props.glow} />
+      <mesh rotation-x={-Math.PI / 2} receiveShadow onClick={back}>
+        <planeGeometry args={[160, 160]} />
         <meshStandardMaterial color="#0d0d0f" roughness={0.92} />
       </mesh>
-      <Station index={0}>
+      <group onClick={back}>
+        <Table />
+      </group>
+      <Item id="card" {...item}>
+        <Card />
+      </Item>
+      <Item id="chips" focus={focus}>
+        <ChipStack balance={props.balance} />
+      </Item>
+      <Item id="roulette" {...item}>
         <Roulette round={props.rounds.roulette} onDone={props.onRouletteDone} />
-      </Station>
-      <Station index={1}>
+      </Item>
+      <Item id="dice" {...item}>
         <Dice round={props.rounds.dice} onDone={props.onDiceDone} />
-      </Station>
-      <Station index={2}>
-        <group position-z={-0.3}>
-          <Slots round={props.rounds.slots} onDone={props.onSlotsDone} />
-        </group>
-      </Station>
+      </Item>
+      <Item id="slots" {...item}>
+        <Slots round={props.rounds.slots} onDone={props.onSlotsDone} />
+      </Item>
     </Canvas>
   );
 }
